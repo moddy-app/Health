@@ -1,0 +1,523 @@
+"""Cycle de vie des incidents : ouverture, updates, résolution, historique.
+
+Un seul incident actif à la fois (`hm:incident:active`). Si un nouveau service
+tombe pendant un incident en cours, on met à jour l'incident existant plutôt
+que d'en créer un second.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+
+from .. import keys
+from ..config import Settings
+from ..integrations.betterstack import BetterStack, process_report
+from ..render import colors
+from ..state import Store
+from ..util import age_seconds, incident_id, iso
+from .detector import DOWN, Snapshot
+from .notifier import Notifier
+
+log = logging.getLogger("hm.incident")
+
+MONITOR = "Moddy Health Monitor"
+
+TYPE_INCIDENT = "incident"
+TYPE_MAINTENANCE = "maintenance"
+TYPE_DEGRADED = "degraded_performance"
+
+# Niveaux qui justifient une publication sur la status page. Le `degraded` ne
+# crée pas d'incident public : sinon la page passe au rouge à chaque hoquet de
+# Redis.
+PUBLIC_LEVELS = {colors.PARTIAL_OUTAGE, colors.MAJOR_OUTAGE}
+
+
+def _type_for(level: str) -> str:
+    return TYPE_DEGRADED if level == colors.DEGRADED else TYPE_INCIDENT
+
+
+class IncidentManager:
+    def __init__(
+        self, settings: Settings, store: Store, betterstack: BetterStack, notifier: Notifier
+    ) -> None:
+        self._s = settings
+        self._store = store
+        self._bs = betterstack
+        self._notifier = notifier
+
+    # ------------------------------------------------------------------
+    # Persistance
+    # ------------------------------------------------------------------
+    async def get_active(self) -> dict | None:
+        data = await self._store.get_json(keys.INCIDENT_ACTIVE)
+        return data if isinstance(data, dict) else None
+
+    async def _save(self, incident: dict) -> None:
+        await self._store.set_json(keys.INCIDENT_ACTIVE, incident)
+
+    async def _archive(self, incident: dict) -> None:
+        await self._store.rpush(
+            keys.INCIDENT_HISTORY, json.dumps(incident, separators=(",", ":"))
+        )
+        await self._store.ltrim(keys.INCIDENT_HISTORY, -keys.INCIDENT_HISTORY_MAX, -1)
+        await self._store.delete(keys.INCIDENT_ACTIVE)
+
+    async def history(self, limit: int = 20) -> list[dict]:
+        raw = await self._store.lrange(keys.INCIDENT_HISTORY, -limit, -1)
+        out: list[dict] = []
+        for item in reversed(raw):
+            try:
+                out.append(json.loads(item))
+            except json.JSONDecodeError:
+                continue
+        return out
+
+    def _url_for(self, report_id: str | None) -> str | None:
+        if not report_id:
+            return None
+        return f"{self._s.discord_status_page_url.rstrip('/')}/en/incident/{report_id}"
+
+    # ------------------------------------------------------------------
+    # Better Stack
+    # ------------------------------------------------------------------
+    async def _publish_betterstack(
+        self,
+        incident: dict,
+        message: str,
+        *,
+        statuses: dict[str, str],
+        notify: bool,
+    ) -> None:
+        """Crée le report s'il n'existe pas encore, sinon poste un update."""
+        if not self._bs.enabled:
+            return
+        level = incident.get("level", colors.MAJOR_OUTAGE)
+        is_public = level in PUBLIC_LEVELS or incident.get("type") == TYPE_MAINTENANCE
+        if not is_public:
+            return
+
+        affected = incident.get("affected") or []
+        resources = self._bs.resources_for(affected, statuses, level)
+        if not resources:
+            log.warning("aucune ressource Better Stack mappée pour %s", affected)
+            return
+
+        report_id = incident.get("bs_report_id")
+        if report_id:
+            await self._bs.post_update(
+                report_id,
+                message=message,
+                affected_resources=resources,
+                notify_subscribers=notify,
+            )
+            return
+
+        report_type = TYPE_MAINTENANCE if incident.get("type") == TYPE_MAINTENANCE else "manual"
+        report_id = await self._bs.create_report(
+            title=incident.get("title") or "Incident",
+            message=message,
+            affected_resources=resources,
+            report_type=report_type,
+            notify_subscribers=notify,
+            published_at=incident.get("created_at"),
+            starts_at=incident.get("starts_at"),
+            ends_at=incident.get("ends_at"),
+        )
+        if report_id:
+            incident["bs_report_id"] = report_id
+            incident["url"] = incident.get("url") or self._url_for(report_id)
+
+    # ------------------------------------------------------------------
+    # Cycle de vie
+    # ------------------------------------------------------------------
+    async def open(
+        self,
+        *,
+        title: str,
+        message: str,
+        level: str,
+        affected: list[str],
+        origin: str,
+        author: str = MONITOR,
+        type_: str | None = None,
+        notify: bool = False,
+        statuses: dict[str, str] | None = None,
+        starts_at: str | None = None,
+        ends_at: str | None = None,
+        bs_report_id: str | None = None,
+        url: str | None = None,
+    ) -> dict:
+        now = iso()
+        incident: dict = {
+            "id": incident_id(),
+            "bs_report_id": bs_report_id,
+            "discord_message_id": None,
+            "discord_channel_id": self._s.discord_status_channel_id,
+            "discord_transport": None,
+            "title": title,
+            "message": message,
+            "type": type_ or _type_for(level),
+            "level": level,
+            "origin": origin,
+            "affected": list(affected),
+            "status": "open",
+            "created_by": author,
+            "created_at": now,
+            "resolved_at": None,
+            "url": url or self._url_for(bs_report_id),
+            "updates": [{"kind": "created", "at": now, "message": message, "author": author}],
+        }
+        if starts_at:
+            incident["starts_at"] = starts_at
+        if ends_at:
+            incident["ends_at"] = ends_at
+
+        statuses = statuses or {s: DOWN for s in affected}
+        await self._publish_betterstack(incident, message, statuses=statuses, notify=notify)
+        await self._save(incident)
+        incident = await self._notifier.dispatch(incident)
+        await self._save(incident)
+        log.info("incident %s ouvert (%s, origine %s)", incident["id"], level, origin)
+        return incident
+
+    async def add_update(
+        self,
+        *,
+        message: str,
+        author: str = MONITOR,
+        kind: str = "updated",
+        level: str | None = None,
+        affected: list[str] | None = None,
+        notify: bool = False,
+        statuses: dict[str, str] | None = None,
+        publish_betterstack: bool = True,
+    ) -> dict | None:
+        incident = await self.get_active()
+        if incident is None:
+            log.warning("update demandé sans incident actif")
+            return None
+
+        if level:
+            incident["level"] = level
+            if incident.get("type") != TYPE_MAINTENANCE:
+                incident["type"] = _type_for(level)
+        if affected is not None:
+            incident["affected"] = list(affected)
+
+        incident["status"] = "updating"
+        incident["updates"].append(
+            {"kind": kind, "at": iso(), "message": message, "author": author}
+        )
+
+        if publish_betterstack:
+            statuses = statuses or {s: DOWN for s in incident.get("affected") or []}
+            await self._publish_betterstack(incident, message, statuses=statuses, notify=notify)
+
+        await self._save(incident)
+        incident = await self._notifier.dispatch(incident)
+        await self._save(incident)
+        return incident
+
+    async def resolve(
+        self,
+        *,
+        message: str,
+        author: str = MONITOR,
+        notify: bool = False,
+        publish_betterstack: bool = True,
+    ) -> dict | None:
+        incident = await self.get_active()
+        if incident is None:
+            return None
+
+        incident["status"] = "resolved"
+        incident["resolved_at"] = iso()
+        incident["updates"].append(
+            {"kind": "resolved", "at": incident["resolved_at"], "message": message, "author": author}
+        )
+
+        report_id = incident.get("bs_report_id")
+        if publish_betterstack and report_id and self._bs.enabled:
+            # Pas d'endpoint `/resolve` : on poste un update dont chaque
+            # ressource affectée porte `status: "resolved"`.
+            await self._bs.resolve_report(
+                report_id,
+                message=message,
+                services=incident.get("affected") or [],
+                notify_subscribers=notify,
+            )
+
+        incident = await self._notifier.dispatch(incident)
+        await self._archive(incident)
+        log.info("incident %s résolu", incident.get("id"))
+        return incident
+
+    # ------------------------------------------------------------------
+    # Détection automatique
+    # ------------------------------------------------------------------
+    async def reconcile(self, snapshot: Snapshot) -> None:
+        """Aligne l'incident actif sur l'état observé."""
+        if snapshot.in_grace:
+            return
+
+        active = await self.get_active()
+        level = snapshot.level
+        affected = snapshot.affected
+        statuses = snapshot.statuses()
+
+        if level == colors.OPERATIONAL:
+            if active and active.get("origin") == "auto":
+                await self.resolve(message="All systems are operational again.")
+            return
+
+        if active is None:
+            if not await self._allow_any(affected, statuses):
+                return
+            await self.open(
+                title=_auto_title(level, affected, self._s),
+                message=_auto_message(level, affected, self._s),
+                level=level,
+                affected=affected,
+                origin="auto",
+                notify=level == colors.MAJOR_OUTAGE,
+                statuses=statuses,
+            )
+            return
+
+        # Incident déjà ouvert : on l'enrichit plutôt que d'en créer un second,
+        # y compris s'il a été ouvert à la main ou depuis Better Stack.
+        known = set(active.get("affected") or [])
+        changed = set(affected) - known
+        recovered = known - set(affected)
+        if not changed and not recovered and level == active.get("level"):
+            return
+        if changed and not await self._allow_any(sorted(changed), statuses):
+            return
+
+        await self.add_update(
+            message=_auto_message(level, affected, self._s),
+            level=level if active.get("origin") == "auto" else active.get("level"),
+            affected=affected,
+            notify=False,
+            statuses=statuses,
+        )
+
+    async def _allow_any(self, services: list[str], statuses: dict[str, str]) -> bool:
+        """Rate-limit : au moins un service doit être hors de sa fenêtre de 5 min."""
+        allowed = False
+        for service in services:
+            if await self._notifier.allow(service, statuses.get(service, DOWN)):
+                allowed = True
+        return allowed
+
+    # ------------------------------------------------------------------
+    # Commandes du staff (bot -> monitor)
+    # ------------------------------------------------------------------
+    async def handle_command(self, action: str, payload: dict) -> dict | None:
+        author = payload.get("author") or "Staff"
+        notify = bool(payload.get("notify"))
+
+        if action == "incident.create":
+            level = payload.get("level") or colors.PARTIAL_OUTAGE
+            affected = payload.get("affected") or []
+            if await self.get_active():
+                # Un seul incident à la fois : la commande enrichit l'existant.
+                return await self.add_update(
+                    message=payload.get("message") or "",
+                    author=author,
+                    level=level,
+                    affected=affected,
+                    notify=notify,
+                )
+            return await self.open(
+                title=payload.get("title") or _auto_title(level, affected, self._s),
+                message=payload.get("message") or "",
+                level=level,
+                affected=affected,
+                origin="discord",
+                author=author,
+                notify=notify,
+            )
+
+        if action == "incident.update":
+            return await self.add_update(
+                message=payload.get("message") or "",
+                author=author,
+                level=payload.get("level"),
+                affected=payload.get("affected"),
+                notify=notify,
+            )
+
+        if action == "incident.resolve":
+            return await self.resolve(
+                message=payload.get("message") or "This incident has been resolved.",
+                author=author,
+                notify=notify,
+            )
+
+        if action == "maintenance.create":
+            ends_at = payload.get("ends_at")
+            if not ends_at:
+                log.error("maintenance sans ends_at refusée")
+                return None
+            return await self.open(
+                title=payload.get("title") or "Scheduled Maintenance",
+                message=payload.get("message") or "",
+                level=colors.MAINTENANCE,
+                affected=payload.get("affected") or [],
+                origin="discord",
+                author=author,
+                type_=TYPE_MAINTENANCE,
+                notify=notify,
+                starts_at=payload.get("starts_at") or iso(),
+                ends_at=ends_at,
+            )
+
+        log.warning("commande inconnue: %s", action)
+        return None
+
+    # ------------------------------------------------------------------
+    # Retour Better Stack (webhook + poll)
+    # ------------------------------------------------------------------
+    async def handle_bs_payload(self, payload: dict) -> None:
+        """Traite un event webhook Better Stack (§6, anti-boucle)."""
+        await self._store.set(keys.BS_LAST_EVENT, iso())
+
+        node = payload.get("incident") or payload.get("maintenance")
+        if not node:
+            component = payload.get("component_update")
+            if component:
+                log.info(
+                    "component_update Better Stack: %s -> %s",
+                    (payload.get("component") or {}).get("name"),
+                    component.get("new_status"),
+                )
+            return
+
+        updates = [_normalize_update(u) for u in reversed(node.get("incident_updates") or [])]
+        report = {
+            "id": node.get("id"),
+            "title": node.get("name"),
+            "url": node.get("shortlink"),
+            "report_type": "maintenance" if payload.get("event_type") == "maintenance" else "manual",
+            "starts_at": node.get("starts_at"),
+            "ends_at": node.get("ends_at"),
+        }
+        await process_report(
+            self._bs,
+            report,
+            updates,
+            on_owned_update=self._relay_update,
+            on_foreign_incident=self._adopt,
+        )
+
+    async def reconcile_betterstack(self) -> None:
+        """Filet de sécurité : rattrape ce qu'un webhook manqué aurait perdu."""
+        snapshot = await self._bs.poll_index()
+        if snapshot is None:
+            return
+        for report in snapshot.reports:
+            updates = [
+                {"id": u["id"], "message": u["message"], "at": u.get("published_at")}
+                for u in report.get("updates") or []
+            ]
+            if not updates:
+                continue
+            await process_report(
+                self._bs,
+                report,
+                updates,
+                on_owned_update=self._relay_update,
+                on_foreign_incident=self._adopt,
+            )
+        await self._store.set(keys.BS_CURSOR, iso())
+
+    async def _relay_update(self, report: dict, update: dict) -> None:
+        """Un update posté à la main sur *notre* incident : on le relaie."""
+        active = await self.get_active()
+        if not active or str(active.get("bs_report_id")) != str(report.get("id")):
+            return
+        await self.add_update(
+            message=update.get("message") or "",
+            author=update.get("author") or "Better Stack",
+            notify=False,
+            # L'update existe déjà côté Better Stack : le republier bouclerait.
+            publish_betterstack=False,
+        )
+
+    async def _adopt(self, report: dict, update: dict) -> None:
+        """Incident créé hors du monitor (staff ou monitor Better Stack)."""
+        active = await self.get_active()
+        report_id = str(report.get("id"))
+
+        if active and str(active.get("bs_report_id")) == report_id:
+            await self._relay_update(report, update)
+            return
+        if active:
+            log.info("incident Better Stack %s ignoré : un incident est déjà actif", report_id)
+            return
+
+        # `report_type: automatic` = incident créé par un monitor Better Stack,
+        # troisième origine distincte de manual/maintenance.
+        is_maintenance = report.get("report_type") == "maintenance"
+        await self.open(
+            title=report.get("title") or "Incident",
+            message=update.get("message") or "",
+            level=colors.MAINTENANCE if is_maintenance else colors.PARTIAL_OUTAGE,
+            affected=[],
+            origin="betterstack",
+            author="Better Stack",
+            type_=TYPE_MAINTENANCE if is_maintenance else TYPE_INCIDENT,
+            bs_report_id=report_id,
+            url=report.get("url") or self._url_for(report_id),
+        )
+
+    async def webhook_seems_dead(self) -> bool:
+        """Après 10 échecs de livraison, Better Stack coupe la souscription."""
+        last = await self._store.get(keys.BS_LAST_EVENT)
+        if not last:
+            return False
+        return (age_seconds(last) or 0) > self._s.hm_bs_webhook_silence_alert
+
+
+# ----------------------------------------------------------------------
+# Textes générés
+# ----------------------------------------------------------------------
+def _names(services: list[str], settings: Settings) -> str:
+    if not services:
+        return "several services"
+    labels = [settings.display_name(s) for s in services]
+    if len(labels) == 1:
+        return labels[0]
+    return ", ".join(labels[:-1]) + " & " + labels[-1]
+
+
+def _auto_title(level: str, services: list[str], settings: Settings) -> str:
+    label = _names(services, settings)
+    if level == colors.MAJOR_OUTAGE:
+        return f"Major Outage – {label} Unavailable"
+    if level == colors.PARTIAL_OUTAGE:
+        return f"Partial Outage – {label} Unavailable"
+    if level == colors.MAINTENANCE:
+        return f"Scheduled Maintenance – {label}"
+    return f"Degraded Performance – {label}"
+
+
+def _auto_message(level: str, services: list[str], settings: Settings) -> str:
+    label = _names(services, settings)
+    if level == colors.DEGRADED:
+        return f"We are seeing degraded performance on {label}. We are looking into it."
+    return (
+        f"We are currently experiencing a service outage affecting {label}. "
+        "Our team has been alerted and is investigating."
+    )
+
+
+def _normalize_update(update: dict) -> dict:
+    """Uniformise les updates venus du webhook et ceux venus d'`index.json`."""
+    return {
+        "id": update.get("id"),
+        "message": update.get("body") or update.get("message") or "",
+        "at": update.get("created_at") or update.get("published_at") or iso(),
+    }

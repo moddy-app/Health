@@ -1,0 +1,1 @@
+"""Routes HTTP du monitor."""

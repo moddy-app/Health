@@ -53,8 +53,12 @@ class Settings(BaseSettings):
     hm_critical_services: str = "moddy-bot,moddy-api"
     hm_service_names: str = ""
     # Propagation d'impact : `source>cible1,cible2`, entrées séparées par `;`,
-    # `*` valant « tous les autres services connus ».
-    hm_impact_map: str = "moddy-bot>*;moddy-api>moddy-website,moddy-dashboard,moddy-bot"
+    # `*` valant « tous les autres services connus ». `=down` sur une cible
+    # propage un `down` au lieu du `degraded` par défaut : sans son backend, le
+    # dashboard n'affiche plus rien, il est down.
+    hm_impact_map: str = (
+        "moddy-bot>*;moddy-api>moddy-website,moddy-dashboard=down,moddy-bot"
+    )
     hm_heartbeat_ttl: int = 60
     hm_check_interval: int = 15
     hm_failure_threshold: int = 3
@@ -64,6 +68,14 @@ class Settings(BaseSettings):
     hm_min_silence: int = 60
     # « max 1 message Discord par service par tranche de 5 min pour le même état »
     hm_notify_rate_limit: int = 300
+
+    # --- Checks HTTP actifs ---
+    # `service:url`, séparés par `,`. Pour les services sans process capable de
+    # pousser un heartbeat (dashboard, site statique) : le monitor sonde l'URL et
+    # en fait un heartbeat synthétique.
+    hm_probe_map: str = ""
+    hm_probe_interval: int = 30
+    hm_probe_timeout: float = 10.0
 
     # --- Redis ---
     redis_url: str = ""
@@ -102,7 +114,28 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     @property
     def services(self) -> list[str]:
-        return _csv(self.hm_services)
+        """Services suivis par le détecteur : ceux qui poussent, plus ceux qu'on sonde.
+
+        Un service sondé produit des heartbeats comme les autres, à ceci près
+        que c'est le monitor qui les écrit. Il n'y a donc pas de raison de le
+        déclarer deux fois : `HM_PROBE_MAP` suffit à le faire surveiller.
+        """
+        monitored = _csv(self.hm_services)
+        for service in self.probe_map:
+            if service not in monitored:
+                monitored.append(service)
+        return monitored
+
+    @property
+    def probe_map(self) -> dict[str, str]:
+        # `_csv_map` coupe à la première `:` — l'identifiant n'en contient pas,
+        # le schéma de l'URL reste donc entier.
+        return _csv_map(self.hm_probe_map)
+
+    @property
+    def probe_ttl(self) -> int:
+        """TTL du heartbeat synthétique : trois sondes manquées, comme à l'ingestion."""
+        return max(self.hm_heartbeat_ttl, self.hm_probe_interval * 3)
 
     @property
     def critical_services(self) -> list[str]:

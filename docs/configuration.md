@@ -35,7 +35,7 @@ Redis, aucune alerte ne peut partir : tout finit dans la file de rattrapage.
 | `HM_SERVICES` | `moddy-bot,moddy-api,moddy-altguard,moddy-feeds` | Liste exhaustive des services attendus |
 | `HM_CRITICAL_SERVICES` | `moddy-bot,moddy-api` | Filtrée sur `HM_SERVICES` ; détermine partial vs major |
 | `HM_SERVICE_NAMES` | — | `id:Nom d'affichage`, séparés par `,`. Des défauts existent pour les services Moddy |
-| `HM_IMPACT_MAP` | `moddy-bot>*;moddy-api>moddy-website,moddy-dashboard,moddy-bot` | Propagation d'impact |
+| `HM_IMPACT_MAP` | `moddy-bot>*;moddy-api>moddy-website,moddy-dashboard=down,moddy-bot` | Propagation d'impact |
 | `HM_HEARTBEAT_TTL` | `60` | TTL de `hm:hb:{service}` — trois fois l'intervalle d'émission |
 | `HM_CHECK_INTERVAL` | `15` | Période de la boucle de détection |
 | `HM_FAILURE_THRESHOLD` | `3` | Cycles d'échec avant bascule |
@@ -57,7 +57,34 @@ inconnu retombe sur un `title case` de son identifiant.
 services connus ». Une entrée vide désactive toute propagation. Les cibles
 inconnues sont ignorées, les sources inconnues loguent un warning au démarrage.
 
+Une cible peut déclarer la sévérité qu'elle subit : `moddy-dashboard=down`
+propage un `down` là où le défaut est `degraded`. Une sévérité illisible retombe
+sur `degraded` avec un warning plutôt que d'empêcher le démarrage, et une cible
+nommée l'emporte sur le joker (`moddy-bot>*,moddy-dashboard=down`).
+
 Détail du modèle : [detection.md](detection.md#propagation-dimpact).
+
+## Checks HTTP actifs
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `HM_PROBE_MAP` | — | `service:url`, séparés par `,` ; vide ⇒ boucle non démarrée |
+| `HM_PROBE_INTERVAL` | `30` | Période de la sonde |
+| `HM_PROBE_TIMEOUT` | `10` | Timeout d'une requête, en secondes |
+
+Pour les services qui n'ont aucun process capable de pousser un heartbeat — un
+dashboard est un site statique. Le monitor `GET` l'URL et en fait un heartbeat
+synthétique : **un 2xx signifie vivant**, tout le reste vaut `down`.
+
+```env
+HM_PROBE_MAP=moddy-dashboard:https://dashboard.moddy.app/healthz
+```
+
+Le découpage se fait à la première `:`, ce qui laisse le schéma de l'URL intact.
+Un service cité ici n'a pas à l'être aussi dans `HM_SERVICES` : `services` fait
+l'union des deux.
+
+Détail du modèle : [heartbeat.md](heartbeat.md#les-services-sans-process).
 
 ## Redis
 
@@ -117,10 +144,13 @@ Une valeur `HM_PUBLIC_RATE_LIMIT` illisible retombe silencieusement sur
 
 | Propriété | Contenu |
 |---|---|
-| `services`, `critical_services` | Listes |
+| `services` | `HM_SERVICES` ∪ clés de `HM_PROBE_MAP` |
+| `critical_services` | Liste, filtrée sur `services` |
 | `service_names`, `display_name(id)` | Noms d'affichage |
-| `known_services` | `HM_SERVICES` ∪ clés de `HM_BS_RESOURCE_MAP` ∪ noms de `HM_IMPACT_MAP` |
+| `known_services` | `services` ∪ clés de `HM_BS_RESOURCE_MAP` ∪ noms de `HM_IMPACT_MAP` |
 | `bs_resource_map` | `{service: resource_id}` |
+| `probe_map` | `{service: url}` |
+| `probe_ttl` | TTL du heartbeat synthétique : trois sondes |
 | `cors_origins` | Liste |
 | `betterstack_enabled` | Booléen |
 | `rate_limit` | `(limite, fenêtre en secondes)` |

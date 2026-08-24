@@ -7,7 +7,8 @@ Repère pour travailler sur ce dépôt. La documentation détaillée est dans
 
 `moddy-health-monitor` : service de monitoring interne de l'écosystème Moddy.
 FastAPI, headless, déployé sur Railway. Les services Moddy **poussent** leur état
-toutes les 20s ; le monitor ne va jamais chercher personne. Il détecte les
+toutes les 20s. Seuls ceux qui n'ont aucun process pour le faire — un dashboard
+est un site statique — sont sondés en HTTP (`HM_PROBE_MAP`). Il détecte les
 pannes, alerte sur Discord, publie sur la status page Better Stack, et sert un
 JSON public au dashboard.
 
@@ -15,7 +16,7 @@ JSON public au dashboard.
 
 ```bash
 uvicorn app.main:app --reload --port 8080    # lancer (REDIS_URL vide = mémoire seule)
-pytest                                        # 81 tests, ~3s
+pytest                                        # 102 tests, ~3s
 python -m pyflakes app examples tests         # lint
 ```
 
@@ -31,7 +32,7 @@ app/
 ├── keys.py        Noms des clés Redis — jamais de nom en dur ailleurs
 ├── state.py       Store Redis + miroir mémoire ; ne lève jamais
 ├── api/           ingest, webhooks, public, health
-├── core/          detector, impact, incident, notifier, scheduler
+├── core/          detector, impact, incident, notifier, probe, scheduler
 ├── integrations/  betterstack, discord_webhook, redis_bus
 └── render/        components (Components V2), colors
 ```
@@ -42,7 +43,9 @@ réconciliation, calcul de `/v1/status`, signal sticky.
 ## Invariants à ne pas casser
 
 1. **Le monitor ne dépend de rien de ce qu'il surveille.** Pas de PostgreSQL, pas
-   d'appel vers l'API Moddy, aucun import du code du bot.
+   d'appel vers l'API Moddy, aucun import du code du bot. La sonde de
+   `core/probe.py` ne fait exception qu'en apparence : elle `GET` une URL
+   publique, comme un navigateur, et son échec n'écrit qu'un `down`.
 2. **Aucune exception ne remonte jusqu'à une boucle.** `core/scheduler.py`
    enveloppe chaque itération : log et continue.
 3. **Le store ne lève jamais.** Un appelant n'a pas à gérer l'absence de Redis.
@@ -72,6 +75,8 @@ réconciliation, calcul de `/v1/status`, signal sticky.
   écritures.
 - **Le rate-limit se remet à zéro à la reprise d'un service**, sinon toute
   résolution ouvre un angle mort de 5 minutes.
+- **Une sonde en échec écrit un heartbeat `down`**, elle ne se contente pas de ne
+  rien écrire : sinon la détection attend l'expiration du TTL.
 
 ## Conventions
 
@@ -84,7 +89,7 @@ réconciliation, calcul de `/v1/status`, signal sticky.
 
 ## Branche et livraison
 
-Développer sur `claude/moddy-health-monitor-docs-v7rc3w`. Ne pas ouvrir de pull
+Développer sur `claude/dashboard-monitoring-duap2w`. Ne pas ouvrir de pull
 request sans demande explicite.
 
 ## Où chercher
@@ -110,6 +115,12 @@ Côté **bot Moddy**, dans son propre dépôt : listener Redis + ACK, sticky mes
 et bouton `Refresh` persistant, commandes `/status *` et Modals V2. Le monitor
 publie déjà tout ce dont le bot a besoin.
 
-Côté monitor : l'envoi Components V2 par webhook n'a jamais été confronté au vrai
+Côté monitor : `BetterStack.poll_index()` parse les `status_page_resource` dans
+`snapshot.resources`, mais `reconcile_betterstack()` n'en fait rien — l'état des
+monitors Better Stack n'alimente donc pas `/v1/status`. Sans conséquence pour le
+dashboard, qui a sa propre sonde, mais l'écart reste ouvert pour les ressources
+qui n'en ont pas.
+
+L'envoi Components V2 par webhook n'a jamais été confronté au vrai
 Discord — c'est le premier test à faire au déploiement, avec le repli embed en
 filet.

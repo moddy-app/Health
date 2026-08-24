@@ -50,7 +50,8 @@ app/
 │   ├── impact.py      Propagation d'impact entre services
 │   ├── incident.py    Cycle de vie, commandes staff, retour Better Stack
 │   ├── notifier.py    Chaîne de redondance Discord, file de rattrapage
-│   └── scheduler.py   Les cinq boucles asyncio
+│   ├── probe.py       Sonde HTTP des services sans process
+│   └── scheduler.py   Les six boucles asyncio
 │
 ├── integrations/
 │   ├── betterstack.py Écriture v2, parsing index.json, anti-boucle
@@ -62,11 +63,14 @@ app/
     └── colors.py      Palette, emojis, mapping des niveaux
 ```
 
-Deux modules ne figuraient pas dans la spec d'origine :
+Trois modules ne figuraient pas dans la spec d'origine :
 
 - **`core/impact.py`** — la propagation d'impact, ajoutée après coup.
 - **`core/notifier.py`** — la chaîne de redondance méritait son fichier plutôt
   que d'être diluée dans `incident.py`.
+- **`core/probe.py`** — le dashboard n'a aucun process capable de pousser un
+  heartbeat ; le monitor va donc chercher son URL. Voir
+  [heartbeat.md](heartbeat.md#les-services-sans-process).
 
 Trois autres sont des commodités : `context.py` (câblage), `keys.py` (noms de
 clés), `util.py` (dates).
@@ -90,13 +94,16 @@ continue.
 
 | Boucle | Période | Rôle |
 |---|---|---|
+| `probe` | `HM_PROBE_INTERVAL` (30s) | Sonde HTTP des services sans process |
 | `check` | `HM_CHECK_INTERVAL` (15s) | Cycle de détection, réconciliation, calcul de `/v1/status` |
 | `notify-queue` | 30s | Vide la file de rattrapage Discord |
 | `sticky` | `DISCORD_STICKY_INTERVAL` (120s) | Demande au bot de rafraîchir le sticky |
 | `self-heartbeat` | `HM_SELF_HEARTBEAT_INTERVAL` (60s) | Ping Better Stack |
 | `bs-poll` | `BETTERSTACK_POLL_INTERVAL` (300s) | Réconciliation Better Stack |
 
-Les deux dernières ne démarrent que si leur URL est configurée.
+`probe` ne démarre que si `HM_PROBE_MAP` est renseignée, les deux dernières que
+si leur URL l'est. `probe` est lancée avant `check` : ses heartbeats synthétiques
+doivent exister avant qu'on ne les relise.
 
 La boucle `check` tente aussi une reconnexion Redis à chaque tour quand le store
 est dégradé : le resynchronisation est automatique, il n'y a pas de boucle

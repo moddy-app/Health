@@ -1,4 +1,4 @@
-"""Boucles asyncio : check, poll Better Stack, self-heartbeat, sticky, file.
+"""Boucles asyncio : check, sonde HTTP, poll Better Stack, self-heartbeat, sticky, file.
 
 Règle §11 : aucune exception ne remonte jusqu'à la boucle principale. Chaque
 tâche est enveloppée, log, et continue.
@@ -18,6 +18,7 @@ from ..state import Store
 from .detector import Detector
 from .incident import IncidentManager
 from .notifier import Notifier
+from .probe import Probe
 
 log = logging.getLogger("hm.scheduler")
 
@@ -31,6 +32,7 @@ class Scheduler:
         incidents: IncidentManager,
         notifier: Notifier,
         betterstack: BetterStack,
+        probe: Probe,
     ) -> None:
         self._s = settings
         self._store = store
@@ -38,6 +40,7 @@ class Scheduler:
         self._incidents = incidents
         self._notifier = notifier
         self._bs = betterstack
+        self._probe = probe
         self._tasks: list[asyncio.Task] = []
         self._last_level: str | None = None
 
@@ -53,6 +56,10 @@ class Scheduler:
             await asyncio.sleep(interval)
 
     def start(self) -> None:
+        # Sonde en premier : ses heartbeats synthétiques doivent exister avant
+        # que la détection ne les lise.
+        if self._probe.targets:
+            self._spawn("probe", self._s.hm_probe_interval, self._probe_step)
         self._spawn("check", self._s.hm_check_interval, self._check_step)
         self._spawn("notify-queue", 30, self._queue_step)
         self._spawn("sticky", self._s.discord_sticky_interval, self._sticky_step)
@@ -92,6 +99,9 @@ class Scheduler:
             # Changement d'état : rafraîchissement immédiat du sticky.
             self._last_level = snapshot.level
             await self._notifier.refresh_sticky(public)
+
+    async def _probe_step(self) -> None:
+        await self._probe.run_once()
 
     async def _queue_step(self) -> None:
         await self._notifier.drain_queue()

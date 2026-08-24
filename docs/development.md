@@ -21,7 +21,7 @@ pour développer, y compris la détection et les incidents.
 ## Tester
 
 ```bash
-pytest              # 81 tests, ~3s
+pytest              # 102 tests, ~3s
 pytest tests/test_impact.py -v
 python -m pyflakes app examples tests
 ```
@@ -36,6 +36,7 @@ async.
 | `test_state.py` | Sémantique du store en mémoire, TTL, sets, listes, claim |
 | `test_detector.py` | Seuils, grace period, transitions, payload public |
 | `test_impact.py` | Les quatre règles produit et les garde-fous |
+| `test_probe.py` | Sonde HTTP : ce qui est écrit, et ce que la détection en fait |
 | `test_incident.py` | Ouverture, enrichissement, résolution, commandes staff |
 | `test_notifier.py` | Chaîne de redondance, file de rattrapage, idempotence |
 | `test_betterstack.py` | Parsing `index.json`, mapping ressources, anti-boucle |

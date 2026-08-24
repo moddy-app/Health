@@ -12,6 +12,7 @@ from .config import Settings, get_settings
 from .core.detector import Detector
 from .core.incident import IncidentManager
 from .core.notifier import Notifier
+from .core.probe import Probe
 from .core.scheduler import Scheduler
 from .integrations.betterstack import BetterStack
 from .integrations.discord_webhook import DiscordWebhook
@@ -30,6 +31,7 @@ class Context:
     webhook: DiscordWebhook
     bus: RedisBus
     detector: Detector
+    probe: Probe
     notifier: Notifier
     incidents: IncidentManager
     scheduler: Scheduler
@@ -47,9 +49,10 @@ def build_context(settings: Settings | None = None) -> Context:
     webhook = DiscordWebhook(settings.discord_webhook_url, client=http)
     bus = RedisBus(store, ack_timeout=settings.discord_bot_ack_timeout)
     detector = Detector(settings, store)
+    probe = Probe(settings, store, http)
     notifier = Notifier(settings, store, bus, webhook)
     incidents = IncidentManager(settings, store, betterstack, notifier)
-    scheduler = Scheduler(settings, store, detector, incidents, notifier, betterstack)
+    scheduler = Scheduler(settings, store, detector, incidents, notifier, betterstack, probe)
 
     return Context(
         settings=settings,
@@ -59,6 +62,7 @@ def build_context(settings: Settings | None = None) -> Context:
         webhook=webhook,
         bus=bus,
         detector=detector,
+        probe=probe,
         notifier=notifier,
         incidents=incidents,
         scheduler=scheduler,

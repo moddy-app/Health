@@ -6,6 +6,7 @@ import pytest
 
 from app import keys
 from app.core.detector import DOWN, OPERATIONAL, ServiceState, Snapshot
+from app.core.impact import ImpactGraph
 from app.core.incident import TYPE_DEGRADED, TYPE_MAINTENANCE, IncidentManager
 from app.integrations.betterstack import BetterStack
 from app.render import colors
@@ -17,6 +18,7 @@ class StubNotifier:
 
     def __init__(self) -> None:
         self.dispatched: list[dict] = []
+        self.resets: list[str] = []
         self.allowed = True
 
     async def dispatch(self, incident, *, queue_on_failure=True):
@@ -27,6 +29,9 @@ class StubNotifier:
 
     async def allow(self, service, status):
         return self.allowed
+
+    async def reset(self, service):
+        self.resets.append(service)
 
     async def refresh_sticky(self, public):
         return None
@@ -42,32 +47,60 @@ def manager(settings, store, notifier):
     return IncidentManager(settings, store, BetterStack(settings, store), notifier)
 
 
-def snapshot(level: str, statuses: dict[str, str]) -> Snapshot:
-    return Snapshot(
-        level=level,
-        updated_at=iso(),
-        services={
-            name: ServiceState(service=name, status=status) for name, status in statuses.items()
-        },
+@pytest.fixture
+def snapshot(settings):
+    """Construit un Snapshot en passant par la vraie propagation d'impact."""
+    graph = ImpactGraph(
+        settings.hm_impact_map, settings.known_services, monitored=settings.services
     )
 
+    def _snapshot(
+        level: str,
+        statuses: dict[str, str],
+        transitions: list[tuple[str, str, str]] | None = None,
+    ) -> Snapshot:
+        effective, impacted_by = graph.apply(statuses)
+        return Snapshot(
+            level=level,
+            updated_at=iso(),
+            services={
+                name: ServiceState(service=name, status=status)
+                for name, status in statuses.items()
+            },
+            effective=effective,
+            impacted_by=impacted_by,
+            transitions=transitions or [],
+        )
 
-async def test_open_update_resolve(manager, notifier, store):
+    return _snapshot
+
+
+async def test_open_update_resolve(manager, notifier, store, snapshot):
     await manager.reconcile(
         snapshot(colors.PARTIAL_OUTAGE, {"moddy-bot": DOWN, "moddy-api": OPERATIONAL})
     )
     incident = await manager.get_active()
     assert incident["origin"] == "auto"
     assert incident["level"] == colors.PARTIAL_OUTAGE
-    assert incident["affected"] == ["moddy-bot"]
+    # Le bot tombe : tout le reste est dégradé par ricochet.
+    assert incident["affected"] == [
+        "moddy-bot",
+        "moddy-api",
+        "moddy-website",
+        "moddy-dashboard",
+    ]
     assert incident["updates"][0]["kind"] == "created"
+    # Le titre ne nomme que la cause racine.
+    assert incident["title"] == "Partial Outage – Moddy Bot Unavailable"
+    assert "API, Website & Dashboard may be degraded as a result." in incident["message"]
 
     # Un second service tombe : on enrichit l'incident, on n'en crée pas un autre.
     await manager.reconcile(snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": DOWN, "moddy-api": DOWN}))
     incident = await manager.get_active()
     assert incident["level"] == colors.MAJOR_OUTAGE
-    assert incident["affected"] == ["moddy-bot", "moddy-api"]
+    assert incident["title"] == "Partial Outage – Moddy Bot Unavailable"  # titre figé à l'ouverture
     assert len(incident["updates"]) == 2
+    assert "Moddy Bot & API" in incident["updates"][-1]["message"]
 
     # Tout revient : résolution puis archivage.
     await manager.reconcile(
@@ -80,7 +113,7 @@ async def test_open_update_resolve(manager, notifier, store):
     assert history[0]["updates"][-1]["kind"] == "resolved"
 
 
-async def test_grace_period_blocks_every_alert(manager, notifier):
+async def test_grace_period_blocks_every_alert(manager, notifier, snapshot):
     snap = snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": DOWN, "moddy-api": DOWN})
     snap.in_grace = True
     await manager.reconcile(snap)
@@ -88,7 +121,7 @@ async def test_grace_period_blocks_every_alert(manager, notifier):
     assert notifier.dispatched == []
 
 
-async def test_rate_limit_defers_the_alert(manager, notifier):
+async def test_rate_limit_defers_the_alert(manager, notifier, snapshot):
     notifier.allowed = False
     await manager.reconcile(snapshot(colors.PARTIAL_OUTAGE, {"moddy-bot": DOWN}))
     assert await manager.get_active() is None
@@ -98,7 +131,7 @@ async def test_rate_limit_defers_the_alert(manager, notifier):
     assert await manager.get_active() is not None
 
 
-async def test_unchanged_state_does_not_spam_updates(manager, notifier):
+async def test_unchanged_state_does_not_spam_updates(manager, notifier, snapshot):
     snap = snapshot(colors.PARTIAL_OUTAGE, {"moddy-bot": DOWN})
     await manager.reconcile(snap)
     await manager.reconcile(snap)
@@ -106,11 +139,23 @@ async def test_unchanged_state_does_not_spam_updates(manager, notifier):
     assert len((await manager.get_active())["updates"]) == 1
 
 
-async def test_degraded_is_never_published_on_the_status_page(manager, store):
+async def test_degraded_is_never_published_on_the_status_page(manager, store, snapshot):
     await manager.reconcile(snapshot(colors.DEGRADED, {"moddy-bot": "degraded"}))
     incident = await manager.get_active()
     assert incident["type"] == TYPE_DEGRADED
     assert incident["bs_report_id"] is None
+
+
+async def test_recovery_gives_the_service_back_its_right_to_alert(manager, notifier, snapshot):
+    """Sans ce reset, toute résolution ouvre un angle mort de 5 minutes."""
+    await manager.reconcile(
+        snapshot(
+            colors.OPERATIONAL,
+            {"moddy-bot": OPERATIONAL, "moddy-api": OPERATIONAL},
+            transitions=[("moddy-bot", DOWN, OPERATIONAL)],
+        )
+    )
+    assert notifier.resets == ["moddy-bot"]
 
 
 async def test_staff_command_opens_then_resolves(manager):

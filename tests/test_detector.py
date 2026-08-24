@@ -71,7 +71,11 @@ async def test_major_outage_when_all_critical_down(detector, store, settings):
     for _ in range(3):
         snapshot = await detector.run_cycle()
     assert snapshot.level == colors.MAJOR_OUTAGE
-    assert snapshot.affected == ["moddy-bot", "moddy-api"]
+    assert snapshot.failing == ["moddy-bot", "moddy-api"]
+    # Le site et le dashboard ne poussent pas de heartbeat mais sont dégradés
+    # par ricochet.
+    assert snapshot.affected == ["moddy-bot", "moddy-api", "moddy-website", "moddy-dashboard"]
+    assert snapshot.collateral == ["moddy-website", "moddy-dashboard"]
 
 
 async def test_service_declared_degraded_alerts_without_silence(detector, store, settings):

@@ -16,7 +16,7 @@ from ..integrations.betterstack import BetterStack, process_report
 from ..render import colors
 from ..state import Store
 from ..util import age_seconds, incident_id, iso
-from .detector import DOWN, Snapshot
+from .detector import DOWN, OPERATIONAL, Snapshot
 from .notifier import Notifier
 
 log = logging.getLogger("hm.incident")
@@ -261,9 +261,17 @@ class IncidentManager:
         if snapshot.in_grace:
             return
 
+        for service, _, new_status in snapshot.transitions:
+            if new_status == OPERATIONAL:
+                await self._notifier.reset(service)
+
         active = await self.get_active()
         level = snapshot.level
+        # `affected` porte aussi les services dégradés par ricochet ; `failing`
+        # ne contient que les causes racines, seules dignes de figurer dans le
+        # titre et de consommer le rate-limit.
         affected = snapshot.affected
+        root = snapshot.failing
         statuses = snapshot.statuses()
 
         if level == colors.OPERATIONAL:
@@ -272,11 +280,11 @@ class IncidentManager:
             return
 
         if active is None:
-            if not await self._allow_any(affected, statuses):
+            if not await self._allow_any(root, statuses):
                 return
             await self.open(
-                title=_auto_title(level, affected, self._s),
-                message=_auto_message(level, affected, self._s),
+                title=_auto_title(level, root, self._s),
+                message=_auto_message(level, root, snapshot.collateral, self._s),
                 level=level,
                 affected=affected,
                 origin="auto",
@@ -292,11 +300,12 @@ class IncidentManager:
         recovered = known - set(affected)
         if not changed and not recovered and level == active.get("level"):
             return
-        if changed and not await self._allow_any(sorted(changed), statuses):
+        newly_failing = [s for s in root if s in changed]
+        if changed and not await self._allow_any(newly_failing or sorted(changed), statuses):
             return
 
         await self.add_update(
-            message=_auto_message(level, affected, self._s),
+            message=_auto_message(level, root, snapshot.collateral, self._s),
             level=level if active.get("origin") == "auto" else active.get("level"),
             affected=affected,
             notify=False,
@@ -504,14 +513,21 @@ def _auto_title(level: str, services: list[str], settings: Settings) -> str:
     return f"Degraded Performance – {label}"
 
 
-def _auto_message(level: str, services: list[str], settings: Settings) -> str:
+def _auto_message(
+    level: str, services: list[str], collateral: list[str], settings: Settings
+) -> str:
     label = _names(services, settings)
     if level == colors.DEGRADED:
-        return f"We are seeing degraded performance on {label}. We are looking into it."
-    return (
-        f"We are currently experiencing a service outage affecting {label}. "
-        "Our team has been alerted and is investigating."
-    )
+        message = f"We are seeing degraded performance on {label}. We are looking into it."
+    else:
+        message = (
+            f"We are currently experiencing a service outage affecting {label}. "
+            "Our team has been alerted and is investigating."
+        )
+    if collateral:
+        # Nommer les dégâts collatéraux plutôt que de les mélanger à la cause.
+        message += f" {_names(collateral, settings)} may be degraded as a result."
+    return message
 
 
 def _normalize_update(update: dict) -> dict:

@@ -153,3 +153,13 @@ async def test_rate_limit_is_per_service_and_state(make):
     assert await notifier.allow("moddy-bot", "down") is False
     assert await notifier.allow("moddy-bot", "degraded") is True
     assert await notifier.allow("moddy-api", "down") is True
+
+
+async def test_reset_clears_the_rate_limit_on_recovery(make):
+    notifier, _ = make(FakeBus(), FakeWebhook())
+    assert await notifier.allow("moddy-bot", "down") is True
+    assert await notifier.allow("moddy-bot", "down") is False
+
+    await notifier.reset("moddy-bot")
+    assert await notifier.allow("moddy-bot", "down") is True
+    assert await notifier.allow("moddy-bot", "degraded") is True

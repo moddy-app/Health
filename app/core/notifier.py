@@ -24,6 +24,7 @@ from ..integrations.redis_bus import RedisBus
 from ..render.components import build_incident_components, build_incident_embed
 from ..state import Store
 from ..util import iso
+from .impact import DEGRADED, DOWN
 
 log = logging.getLogger("hm.notifier")
 
@@ -59,6 +60,21 @@ class Notifier:
         """Max 1 notification par service et par état toutes les 5 minutes."""
         key = keys.NOTIFY_RATELIMIT.format(service=service, status=status)
         return await self._store.claim(key, self._s.hm_notify_rate_limit)
+
+    async def reset(self, service: str) -> None:
+        """Un service revenu à la normale récupère aussitôt son droit d'alerter.
+
+        Sans ça, toute résolution ouvrirait un angle mort : le service resterait
+        muet jusqu'à la fin de sa fenêtre de 5 min, même en retombant pour de
+        bon. Les rechutes rapprochées sont déjà absorbées par les seuils de
+        détection, pas par ce compteur.
+        """
+        await self._store.delete(
+            *(
+                keys.NOTIFY_RATELIMIT.format(service=service, status=status)
+                for status in (DOWN, DEGRADED)
+            )
+        )
 
     # ------------------------------------------------------------------
     # Envoi

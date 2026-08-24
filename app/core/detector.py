@@ -11,6 +11,7 @@ from ..config import Settings
 from ..render import colors
 from ..state import Store
 from ..util import age_seconds, iso, utcnow
+from .impact import ImpactGraph
 
 log = logging.getLogger("hm.detector")
 
@@ -72,16 +73,30 @@ class Snapshot:
     level: str
     updated_at: str
     services: dict[str, ServiceState]
+    # État après propagation d'impact, sur tous les services connus.
+    effective: dict[str, str] = field(default_factory=dict)
+    impacted_by: dict[str, list[str]] = field(default_factory=dict)
     transitions: list[tuple[str, str, str]] = field(default_factory=list)
     in_grace: bool = False
 
     @property
-    def affected(self) -> list[str]:
-        """Services non opérationnels, dans l'ordre de configuration."""
+    def failing(self) -> list[str]:
+        """Causes racines : ce que les heartbeats déclarent eux-mêmes."""
         return [s for s, st in self.services.items() if st.status in (DEGRADED, DOWN)]
 
+    @property
+    def affected(self) -> list[str]:
+        """Causes racines *et* services dégradés par ricochet."""
+        return [s for s, status in self.effective.items() if status in (DEGRADED, DOWN)]
+
+    @property
+    def collateral(self) -> list[str]:
+        """Uniquement les dégradés par ricochet."""
+        return [s for s in self.affected if s in self.impacted_by]
+
     def statuses(self) -> dict[str, str]:
-        return {s: st.status for s, st in self.services.items()}
+        """États effectifs — c'est ce qu'on publie sur la status page."""
+        return dict(self.effective)
 
 
 class Detector:
@@ -89,6 +104,9 @@ class Detector:
         self._s = settings
         self._store = store
         self.states: dict[str, ServiceState] = {}
+        self.impact = ImpactGraph(
+            settings.hm_impact_map, settings.known_services, monitored=settings.services
+        )
         self._started_monotonic = time.monotonic()
         self._started_at = utcnow()
 
@@ -181,27 +199,32 @@ class Detector:
 
             await self._store.set_json(keys.state(service), state.to_dict())
 
-        snapshot = Snapshot(
-            level=self.aggregate(),
-            updated_at=iso(),
-            services={s: self.states[s] for s in self._s.services if s in self.states},
-            transitions=transitions,
-            in_grace=self.in_grace,
-        )
-        return snapshot
+        return self.current_snapshot(transitions=transitions)
 
-    def current_snapshot(self) -> Snapshot:
-        """Vue immédiate, sans I/O — utilisée en secours par `/v1/status`."""
+    def current_snapshot(
+        self, transitions: list[tuple[str, str, str]] | None = None
+    ) -> Snapshot:
+        """Vue immédiate, sans I/O — sert aussi de secours à `/v1/status`."""
+        services = {s: self.states[s] for s in self._s.services if s in self.states}
+        effective, impacted_by = self.impact.apply({s: st.status for s, st in services.items()})
         return Snapshot(
             level=self.aggregate(),
             updated_at=iso(),
-            services={s: self.states[s] for s in self._s.services if s in self.states},
+            services=services,
+            effective=effective,
+            impacted_by=impacted_by,
+            transitions=transitions or [],
             in_grace=self.in_grace,
         )
 
     # ------------------------------------------------------------------
     def aggregate(self) -> str:
         """Sévérité agrégée (§4).
+
+        Calculée sur les états **observés**, pas sur les états propagés : « un
+        service critique down » doit rester une affirmation exacte. Le résultat
+        serait de toute façon identique, la propagation ne produisant que du
+        `degraded`, et jamais sans qu'un `down` l'ait déclenchée.
 
         `unknown` n'entre pas dans le calcul : tant que les seuils ne sont pas
         atteints, un service jamais vu n'est pas encore une panne.
@@ -236,7 +259,11 @@ class Detector:
                 {
                     "id": service,
                     "name": self._s.display_name(service),
-                    "status": state.status,
+                    # Ce que vit l'utilisateur, propagation d'impact comprise.
+                    "status": snapshot.effective.get(service, state.status),
+                    # Ce que le service dit de lui-même.
+                    "reported": state.status,
+                    "impacted_by": snapshot.impacted_by.get(service, []),
                     "since": state.since,
                 }
                 for service, state in snapshot.services.items()

@@ -8,7 +8,8 @@ Le monitor **ne va pas chercher** l'état des services : ce sont les services qu
 de ce qu'il surveille — pas de PostgreSQL, pas d'appel vers l'API Moddy, Redis
 uniquement pour la persistance, avec fallback mémoire.
 
-La spécification complète est dans [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md).
+Documentation complète : [`docs/`](docs/README.md). Repère pour les sessions
+Claude Code : [`CLAUDE.md`](CLAUDE.md).
 
 ```
 moddy-bot      ─┐
@@ -113,6 +114,23 @@ Sévérité agrégée : `degraded` (Discord seul) → `partial_outage` (+ Better
 `major_outage` (+ notify subscribers). Le `degraded` ne crée pas d'incident **public** :
 sinon la status page passe au rouge à chaque hoquet de Redis.
 
+## Impact entre services
+
+Un service qui tombe n'affecte pas que lui-même (`HM_IMPACT_MAP`) :
+
+| Ce qui tombe | Conséquence |
+|---|---|
+| **Bot** | Tous les autres services passent `degraded` — le bot *est* le produit |
+| **API / backend** | Website, Dashboard et Bot passent `degraded` |
+| **Dashboard** | Aucun impact |
+| **AltGuard, Feeds** | Aucun impact sur les trois gros |
+
+Seul un service `down` propage, et la propagation ne produit que du `degraded` :
+pas de cascade possible. `/v1/status` expose les deux lectures — `status` (vécu
+utilisateur, propagation comprise) et `reported` (ce que le service dit de
+lui-même), avec `impacted_by` pour expliquer l'écart. Détail dans
+[`docs/detection.md`](docs/detection.md#propagation-dimpact).
+
 ## Redondance
 
 | Panne | Comportement |
@@ -156,7 +174,7 @@ app/
 ├── state.py                # Store Redis + fallback mémoire
 ├── util.py
 ├── api/                    # ingest, webhooks, public, health
-├── core/                   # detector, incident, notifier, scheduler
+├── core/                   # detector, impact, incident, notifier, scheduler
 ├── integrations/           # betterstack, discord_webhook, redis_bus
 └── render/                 # components (Components V2), colors
 ```

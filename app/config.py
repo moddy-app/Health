@@ -10,6 +10,9 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# `core.impact` ne dépend de rien : pas de cycle d'import.
+from .core.impact import WILDCARD, parse_rules
+
 # Noms d'affichage par défaut. Une dérivation automatique donnerait « Moddy Api »
 # là où la status page dit « API » — d'où la table explicite, surchargeable par
 # HM_SERVICE_NAMES.
@@ -49,6 +52,9 @@ class Settings(BaseSettings):
     hm_services: str = "moddy-bot,moddy-api,moddy-altguard,moddy-feeds"
     hm_critical_services: str = "moddy-bot,moddy-api"
     hm_service_names: str = ""
+    # Propagation d'impact : `source>cible1,cible2`, entrées séparées par `;`,
+    # `*` valant « tous les autres services connus ».
+    hm_impact_map: str = "moddy-bot>*;moddy-api>moddy-website,moddy-dashboard,moddy-bot"
     hm_heartbeat_ttl: int = 60
     hm_check_interval: int = 15
     hm_failure_threshold: int = 3
@@ -114,6 +120,24 @@ class Settings(BaseSettings):
     @property
     def bs_resource_map(self) -> dict[str, str]:
         return _csv_map(self.hm_bs_resource_map)
+
+    @property
+    def known_services(self) -> list[str]:
+        """Tous les services que le monitor sait nommer, dans un ordre stable.
+
+        Plus large que `services` : le site et le dashboard ne poussent pas de
+        heartbeat mais existent comme ressources Better Stack, et peuvent être
+        dégradés par ricochet.
+        """
+        ordered = list(self.services)
+        for candidate in list(self.bs_resource_map):
+            if candidate not in ordered:
+                ordered.append(candidate)
+        for source, targets in parse_rules(self.hm_impact_map).items():
+            for candidate in [source, *targets]:
+                if candidate != WILDCARD and candidate not in ordered:
+                    ordered.append(candidate)
+        return ordered
 
     @property
     def cors_origins(self) -> list[str]:

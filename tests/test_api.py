@@ -62,7 +62,14 @@ def test_status_shape(client):
     body = client.get("/v1/status").json()
     assert set(body) == {"status", "updated_at", "services", "incident", "maintenance"}
     assert [s["id"] for s in body["services"]] == ["moddy-bot", "moddy-api"]
-    assert set(body["services"][0]) == {"id", "name", "status", "since"}
+    assert set(body["services"][0]) == {
+        "id",
+        "name",
+        "status",  # vécu par l'utilisateur, propagation comprise
+        "reported",  # ce que le service dit de lui-même
+        "impacted_by",
+        "since",
+    }
 
 
 def test_status_is_cacheable_and_public(client):

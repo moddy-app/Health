@@ -25,7 +25,7 @@ class FakeClient:
         self.outcomes = list(outcomes)
         self.calls: list[str] = []
 
-    async def get(self, url, timeout=None):
+    async def get(self, url, timeout=None, follow_redirects=True):
         self.calls.append(url)
         outcome = self.outcomes.pop(0) if len(self.outcomes) > 1 else self.outcomes[0]
         if isinstance(outcome, Exception):
@@ -93,6 +93,22 @@ async def test_anything_but_a_2xx_is_down(probe_settings, store, code):
     assert (await written(store))["status"] == "down"
 
 
+async def test_a_redirect_is_not_followed(probe_settings, store):
+    """Le client HTTP partagé suit les redirections (index.json Better Stack) ;
+    la sonde ne doit pas hériter de ce comportement et transformer un 3xx en `ok`."""
+
+    class Redirecting(FakeClient):
+        async def get(self, url, timeout=None, follow_redirects=True):
+            assert follow_redirects is False
+            return await super().get(url, timeout=timeout, follow_redirects=follow_redirects)
+
+    probe = Probe(probe_settings, store, Redirecting(302))
+
+    await probe.run_once()
+
+    assert (await written(store))["status"] == "down"
+
+
 async def test_an_unreachable_url_is_down_not_silence(probe_settings, store):
     """Une sonde qui échoue doit écrire, sinon la détection attend l'expiration du TTL."""
     probe = Probe(probe_settings, store, FakeClient(TimeoutError("timed out")))
@@ -110,10 +126,10 @@ async def test_a_broken_target_does_not_stop_the_others(probe_settings, store):
     )
 
     class Exploding(FakeClient):
-        async def get(self, url, timeout=None):
+        async def get(self, url, timeout=None, follow_redirects=True):
             if "dashboard" in url:
                 raise RuntimeError("boom")
-            return await super().get(url, timeout=timeout)
+            return await super().get(url, timeout=timeout, follow_redirects=follow_redirects)
 
     await Probe(settings, store, Exploding(200)).run_once()
 

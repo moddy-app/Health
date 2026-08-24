@@ -21,7 +21,7 @@ pour développer, y compris la détection et les incidents.
 ## Tester
 
 ```bash
-pytest              # 102 tests, ~3s
+pytest              # 103 tests, ~3s
 pytest tests/test_impact.py -v
 python -m pyflakes app examples tests
 ```

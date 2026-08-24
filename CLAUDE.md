@@ -16,7 +16,7 @@ JSON public au dashboard.
 
 ```bash
 uvicorn app.main:app --reload --port 8080    # lancer (REDIS_URL vide = mémoire seule)
-pytest                                        # 102 tests, ~3s
+pytest                                        # 103 tests, ~3s
 python -m pyflakes app examples tests         # lint
 ```
 

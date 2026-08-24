@@ -55,7 +55,12 @@ class Probe:
         error: str | None = None
 
         try:
-            response = await self._http.get(url, timeout=self._s.hm_probe_timeout)
+            # Le client partagé suit les redirections (nécessaire pour
+            # `status.moddy.app/index.json`) ; la sonde, elle, ne doit pas
+            # transformer un 3xx en faux `ok`.
+            response = await self._http.get(
+                url, timeout=self._s.hm_probe_timeout, follow_redirects=False
+            )
             code = response.status_code
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"

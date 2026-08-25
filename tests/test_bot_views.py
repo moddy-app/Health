@@ -168,8 +168,20 @@ def test_a_modal_never_exceeds_five_top_level_components(ctx):
         modals.IncidentUpdateModal(ctx),
         modals.IncidentResolveModal(ctx),
         modals.MaintenanceModal(ctx),
+        modals.MaintenanceCancelModal(ctx),
     ):
         assert len(modal.children) <= 5
+
+
+def test_cancel_maintenance_reuses_the_resolve_action(ctx):
+    """`/status cancel` clôt la maintenance active par le même chemin que
+    `/status resolve` — pas de logique de fermeture dupliquée."""
+    modal = modals.MaintenanceCancelModal(ctx)
+    assert modal.action == "incident.resolve"
+    interaction = SimpleNamespace(user=SimpleNamespace(display_name="Jules"))
+    payload = modal.build_payload(interaction)
+    assert payload["message"] == "This maintenance has been cancelled."
+    assert payload["author"] == "Jules"
 
 
 def test_the_affected_services_come_from_the_configuration():
@@ -190,8 +202,9 @@ def test_the_affected_group_never_allows_more_choices_than_it_offers(ctx):
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("2026-08-25 02:00 -> 04:00", ("2026-08-25T02:00:00Z", "2026-08-25T04:00:00Z")),
-        ("2026-08-25 23:00 -> 2026-08-26 01:00", ("2026-08-25T23:00:00Z", "2026-08-26T01:00:00Z")),
+        # Saisi en heure française (CEST, UTC+2 fin août) -> stocké en UTC.
+        ("2026-08-25 02:00 -> 04:00", ("2026-08-25T00:00:00Z", "2026-08-25T02:00:00Z")),
+        ("2026-08-25 23:00 -> 2026-08-26 01:00", ("2026-08-25T21:00:00Z", "2026-08-25T23:00:00Z")),
         ("2026-08-25 02:00", (None, None)),
         ("nonsense", (None, None)),
     ],
@@ -340,19 +353,27 @@ def test_the_ongoing_incident_line_never_borrows_the_status_line_icons():
     assert colors.EMOJI_DEGRADED in text  # l'icône de niveau, à la place
 
 
-MAINTENANCE_PUBLIC = {
-    "status": "operational",
-    "updated_at": "2026-08-25T19:00:00Z",
-    "services": [
-        {"id": "moddy-bot", "name": "Moddy Bot", "status": "operational"},
-        {"id": "moddy-api", "name": "API", "status": "operational"},
-    ],
-    "maintenance": {
-        "title": "Scheduled Maintenance",
-        "url": "https://status.moddy.app/incident/1",
-        "affected": ["moddy-api"],
-    },
-}
+def _maintenance_public(*, starts_at, ends_at):
+    return {
+        "status": "operational",
+        "updated_at": "2026-08-25T19:00:00Z",
+        "services": [
+            {"id": "moddy-bot", "name": "Moddy Bot", "status": "operational"},
+            {"id": "moddy-api", "name": "API", "status": "operational"},
+        ],
+        "maintenance": {
+            "title": "Scheduled Maintenance",
+            "url": "https://status.moddy.app/incident/1",
+            "affected": ["moddy-api"],
+            "starts_at": starts_at,
+            "ends_at": ends_at,
+        },
+    }
+
+
+MAINTENANCE_PUBLIC = _maintenance_public(
+    starts_at="2020-01-01T00:00:00Z", ends_at="2099-01-01T00:00:00Z"
+)
 
 
 def test_a_service_under_maintenance_shows_the_maintenance_icon():
@@ -375,3 +396,52 @@ def test_a_regular_incident_does_not_borrow_the_maintenance_icon():
     snapshot = StatusPresentation.from_public(public)
     text = flatten(StickyStatusView(snapshot).to_components())
     assert colors.EMOJI_MAINTENANCE not in text
+
+
+def test_the_maintenance_icon_never_shows_before_the_window():
+    public = _maintenance_public(starts_at="2099-01-01T00:00:00Z", ends_at="2099-01-02T00:00:00Z")
+    snapshot = StatusPresentation.from_public(public)
+    text = flatten(StickyStatusView(snapshot).to_components())
+    assert colors.EMOJI_MAINTENANCE not in text
+    assert f"{colors.EMOJI_OPERATIONAL} ``API" in text
+
+
+def test_the_maintenance_icon_never_shows_after_the_window():
+    public = _maintenance_public(starts_at="2020-01-01T00:00:00Z", ends_at="2020-01-02T00:00:00Z")
+    snapshot = StatusPresentation.from_public(public)
+    text = flatten(StickyStatusView(snapshot).to_components())
+    assert colors.EMOJI_MAINTENANCE not in text
+
+
+def test_the_maintenance_icon_hides_without_a_configured_window():
+    """Sans bornes, impossible d'affirmer qu'on est « pendant » : on s'abstient."""
+    public = _maintenance_public(starts_at=None, ends_at=None)
+    snapshot = StatusPresentation.from_public(public)
+    assert snapshot.maintenance_affected == frozenset()
+
+
+# ----------------------------------------------------------------------
+# /status cancel — n'agit que sur une maintenance active
+# ----------------------------------------------------------------------
+async def test_cancel_requires_an_active_maintenance():
+    from app.bot.commands import _require_active_maintenance
+
+    for active in (None, {"type": "incident"}):
+        client = SimpleNamespace(ctx=SimpleNamespace(incidents=SimpleNamespace(
+            get_active=(lambda a=active: _async_return(a))
+        )))
+        interaction = FakeInteraction()
+        interaction.client = client
+        assert await _require_active_maintenance(interaction) is False
+        assert "No active maintenance" in flatten(interaction.sent.to_components())
+
+    client = SimpleNamespace(ctx=SimpleNamespace(incidents=SimpleNamespace(
+        get_active=lambda: _async_return({"type": "maintenance"})
+    )))
+    interaction = FakeInteraction()
+    interaction.client = client
+    assert await _require_active_maintenance(interaction) is True
+
+
+async def _async_return(value):
+    return value

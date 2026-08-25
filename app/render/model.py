@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from ..util import parse_iso
 from . import colors, theme
 
 
@@ -205,7 +206,24 @@ class StatusPresentation:
             ],
             incident_title=current.get("title"),
             incident_url=current.get("url"),
-            maintenance_affected=frozenset(maintenance.get("affected") or [])
-            if maintenance
-            else frozenset(),
+            maintenance_affected=_maintenance_affected(maintenance),
         )
+
+
+def _maintenance_affected(maintenance: dict | None) -> frozenset[str]:
+    """Les services couverts, uniquement pendant la fenêtre planifiée.
+
+    Une maintenance ouverte à l'avance ou pas encore résolue après coup ne
+    doit pas porter l'icône de maintenance hors de `starts_at`..`ends_at` :
+    avant, rien n'a commencé ; après, seul un oubli de `/status resolve`
+    la maintient active.
+    """
+    if not maintenance:
+        return frozenset()
+    starts_at, ends_at = parse_iso(maintenance.get("starts_at")), parse_iso(maintenance.get("ends_at"))
+    if starts_at is None or ends_at is None:
+        return frozenset()
+    now = datetime.now(tz=timezone.utc)
+    if not (starts_at <= now <= ends_at):
+        return frozenset()
+    return frozenset(maintenance.get("affected") or [])

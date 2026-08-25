@@ -8,6 +8,8 @@ Le texte affiché vient de `Label.text`, `TextInput.label` étant déprécié.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import ui
@@ -15,13 +17,16 @@ from discord import ui
 from ..config import Settings
 from ..render import colors, theme
 from ..render.layout import build_notice_view
-from ..util import iso, parse_iso
+from ..util import iso
 from . import severity
 
 log = logging.getLogger("hm.bot.modals")
 
-# Format demandé au staff pour une fenêtre de maintenance.
+# Format demandé au staff pour une fenêtre de maintenance, en heure française —
+# le staff ne pense pas en UTC. `starts_at`/`ends_at` restent stockés en UTC,
+# comme le reste de l'API publique (§docs/api.md).
 WINDOW_HINT = "2026-08-25 02:00 -> 04:00"
+PARIS = ZoneInfo("Europe/Paris")
 
 
 def _service_options(settings: Settings) -> list[discord.CheckboxGroupOption]:
@@ -81,8 +86,20 @@ def _severity_label() -> ui.Label:
     )
 
 
+def _parse_paris(raw: str) -> datetime | None:
+    """Une date-heure saisie par le staff, interprétée en heure française."""
+    try:
+        naive = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return naive.replace(tzinfo=PARIS)
+
+
 def parse_window(raw: str) -> tuple[str | None, str | None]:
     """`YYYY-MM-DD HH:MM -> HH:MM` (ou une seconde date complète) -> deux ISO-8601.
+
+    Saisi en heure française (Europe/Paris) — c'est celle du staff, pas celle
+    de Better Stack. `iso()` convertit en UTC au passage.
 
     Un seul champ pour la fenêtre : avec `starts_at` et `ends_at` séparés, le
     modal dépasserait les 5 composants top-level.
@@ -94,14 +111,14 @@ def parse_window(raw: str) -> tuple[str | None, str | None]:
     else:
         return None, None
 
-    start = parse_iso(left.strip().replace(" ", "T"))
+    start = _parse_paris(left.strip().replace(" ", "T"))
     if start is None:
         return None, None
 
     end_raw = right.strip()
-    if len(end_raw) <= 5:  # « 04:00 » : même jour que le début
+    if len(end_raw) <= 5:  # « 04:00 » : même jour (français) que le début
         end_raw = f"{start.date().isoformat()} {end_raw}"
-    end = parse_iso(end_raw.replace(" ", "T"))
+    end = _parse_paris(end_raw.replace(" ", "T"))
     return iso(start), iso(end) if end else None
 
 
@@ -273,6 +290,36 @@ class IncidentResolveModal(_StaffModal, title="Resolve Incident"):
         }
 
 
+class MaintenanceCancelModal(_StaffModal, title="Cancel Maintenance"):
+    """Clôt la maintenance active — même mécanique que `IncidentResolveModal`
+    (`incident.resolve` ferme n'importe quel incident actif), un libellé et un
+    message par défaut qui parlent de maintenance plutôt que d'incident."""
+
+    action = "incident.resolve"
+
+    def __init__(self, ctx) -> None:
+        super().__init__(ctx)
+        self.message = ui.Label(
+            text="Reason",
+            description="Shown on the status page",
+            component=ui.TextInput(
+                style=discord.TextStyle.paragraph,
+                max_length=1500,
+                default="This maintenance has been cancelled.",
+            ),
+        )
+        self.notify = _notify_label()
+        self.add_item(self.message)
+        self.add_item(self.notify)
+
+    def build_payload(self, interaction: discord.Interaction) -> dict:
+        return {
+            "message": self.message.component.value,
+            "notify": bool(self.notify.component.values),
+            "author": interaction.user.display_name,
+        }
+
+
 class MaintenanceModal(_StaffModal, title="Schedule Maintenance"):
     action = "maintenance.create"
 
@@ -289,7 +336,7 @@ class MaintenanceModal(_StaffModal, title="Schedule Maintenance"):
             component=ui.TextInput(style=discord.TextStyle.paragraph, max_length=1500),
         )
         self.window = ui.Label(
-            text="Window (UTC)",
+            text="Window (Paris time)",
             description=f"Start and end, e.g. {WINDOW_HINT}",
             component=ui.TextInput(style=discord.TextStyle.short, placeholder=WINDOW_HINT),
         )

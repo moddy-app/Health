@@ -307,6 +307,13 @@ la fenêtre en cours. `StatusPresentation.icon_for()`/`incident_icon` portent
 cette règle, lues sur `maintenance.affected` de `/v1/status` — jamais une
 logique par service (§6).
 
+**L'icône ne sort jamais de `starts_at`..`ends_at`.** Une maintenance ouverte
+à l'avance, ou pas encore résolue une fois la fenêtre passée, ne doit pas
+porter cette icône hors de son créneau : avant, rien n'a commencé ; après,
+c'est un oubli de `/status resolve` ou `/status cancel`, pas une maintenance
+en cours. Sans les deux bornes, impossible d'affirmer qu'on est « pendant » :
+l'icône reste alors masquée.
+
 Trois déclencheurs le font bouger, et ils peuvent tomber ensemble :
 
 | Déclencheur | Effet |
@@ -435,6 +442,7 @@ jusqu'à une heure à se propager, celui d'une guild est instantané.
 | `/status update` | Modal d'update sur l'incident actif |
 | `/status resolve` | Modal de résolution |
 | `/status maintenance` | Modal de maintenance planifiée |
+| `/status cancel` | Modal d'annulation de la maintenance active |
 | `/status check` | État détaillé (éphémère) |
 | `/status sticky` | Force le repost du sticky |
 
@@ -467,10 +475,15 @@ sans réponse laisse l'interaction en échec visible.
 - **La liste des services affectés vient de `known_services`**, jamais d'une
   liste en dur : ajouter un service reste une affaire de variables
   d'environnement (invariant §6). `CheckboxGroup` plafonne à 10 options.
-- **`update` et `resolve` vérifient l'incident actif *avant* d'ouvrir le
-  modal** : `send_modal` ne peut pas être annulé une fois envoyé. L'incident
-  concerné vient de `hm:incident:active`, il n'est jamais demandé au staff.
+- **`update`, `resolve` et `cancel` vérifient l'incident actif *avant*
+  d'ouvrir le modal** : `send_modal` ne peut pas être annulé une fois envoyé.
+  L'incident concerné vient de `hm:incident:active`, il n'est jamais demandé
+  au staff. `cancel` vérifie en plus que ce soit une maintenance —
+  `/status resolve` clôt n'importe quel incident, `/status cancel` refuse
+  s'il n'y en a pas.
 - **La fenêtre de maintenance tient en un seul champ**
   (`2026-08-25 02:00 -> 04:00`) : deux champs séparés porteraient le modal à six
   composants. `ends_at` est obligatoire côté Better Stack pour un
-  `report_type: "maintenance"`.
+  `report_type: "maintenance"`. Saisie en **heure française** (Europe/Paris) —
+  le staff ne pense pas en UTC — puis convertie avant stockage : `starts_at`
+  et `ends_at` restent en UTC partout ailleurs (`/v1/status`, Better Stack).

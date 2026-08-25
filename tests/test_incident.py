@@ -369,3 +369,64 @@ async def test_a_fresh_foreign_incident_is_still_adopted(polling, store):
     assert incident is not None
     assert incident["origin"] == "betterstack"
     assert incident["bs_report_id"] == "1019848"
+
+
+@pytest.fixture
+def mapped_settings():
+    """Une configuration où les ressources Better Stack sont mappées."""
+    from app.config import Settings
+
+    return Settings(
+        redis_url="",
+        hm_services="moddy-bot,moddy-api",
+        hm_startup_grace=0,
+        hm_bs_resource_map="moddy-bot:4242,moddy-api:4243",
+        betterstack_token="token",
+        betterstack_status_page_id="42",
+    )
+
+
+async def test_an_adopted_incident_names_its_affected_services(mapped_settings, store, notifier):
+    """Un incident ouvert à la main sur Better Stack annonçait « Affected services: — ».
+
+    Il ne connaît que des ressources de status page : sans traduction inverse,
+    le message Discord partait sans le moindre service.
+    """
+    await store.set(keys.BS_CURSOR, iso())
+    bs = BetterStack(mapped_settings, store)
+    bs.poll_index = StubIndex(
+        [
+            {
+                "id": "1019848",
+                "title": "Moddy Is Down",
+                "report_type": "manual",
+                "updated_at": iso(),
+                "updates": [
+                    {
+                        "id": "u1",
+                        "message": "We are investigating.",
+                        "published_at": iso(),
+                        "affected_resources": [
+                            {"status_page_resource_id": "4242", "status": "downtime"}
+                        ],
+                    }
+                ],
+            }
+        ]
+    )
+    calls: list[tuple] = []
+
+    async def _never(*args, **kwargs):
+        calls.append(args)
+        return None
+
+    bs._request = _never
+
+    manager = IncidentManager(mapped_settings, store, bs, notifier)
+    await manager.reconcile_betterstack()
+
+    incident = await manager.get_active()
+    assert incident["affected"] == ["moddy-bot"]
+    assert incident["level"] == colors.PARTIAL_OUTAGE
+    # Le report existe déjà là-bas : lui renvoyer son propre message bouclerait.
+    assert calls == []

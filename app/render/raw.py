@@ -40,11 +40,17 @@ def header_title(p: IncidentPresentation) -> str:
 
 def header_body(p: IncidentPresentation) -> str:
     affected = ", ".join(f"``{name}``" for name in p.affected) or "``—``"
-    return (
+    body = (
         f"**Created by:** {p.created_by}\n"
         f"**Affected services:** {affected}\n"
-        f"**Status:** {p.emoji}{p.status_label}"
+        f"**Status:** {p.status_emoji}{p.status_label}"
     )
+    if p.mentions:
+        # En petit, sous l'en-tête : la mention doit prévenir, pas crier. Elle
+        # est portée par le message lui-même plutôt que par un message séparé —
+        # Discord ne repingue pas à l'édition, l'alerte ne part donc qu'une fois.
+        body += f"\n-# {p.mentions}"
+    return body
 
 
 def update_text(update) -> str:

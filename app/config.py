@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     hm_services: str = "moddy-bot,moddy-api,moddy-altguard,moddy-feeds"
     hm_critical_services: str = "moddy-bot,moddy-api"
     hm_service_names: str = ""
+    # Ordre d'affichage — sticky, panneau de détail, `/v1/status`. Il n'a pas de
+    # raison de suivre l'ordre de surveillance : on montre d'abord ce qu'un
+    # utilisateur voit (le bot, le dashboard), les briques internes ensuite.
+    # Un service absent de cette liste passe après, dans son ordre d'origine.
+    hm_service_order: str = "moddy-bot,moddy-dashboard,moddy-api,moddy-altguard,moddy-feeds"
     # Propagation d'impact : `source>cible1,cible2`, entrées séparées par `;`,
     # `*` valant « tous les autres services connus ». `=down` sur une cible
     # propage un `down` au lieu du `degraded` par défaut : sans son backend, le
@@ -108,6 +113,11 @@ class Settings(BaseSettings):
     discord_guild_id: str = ""
     discord_status_channel_id: str = ""
     discord_staff_role_id: str = ""
+    # Rôle prévenu à chaque incident publié dans le salon.
+    discord_alert_role_id: str = "1424466344832925847"
+    # Services dont la panne vaut un `@here` en plus du rôle : ceux qu'un
+    # utilisateur voit tomber. Une panne de Feeds n'a pas à réveiller le salon.
+    hm_escalate_services: str = "moddy-bot,moddy-dashboard,moddy-api"
     # Créé à la main dans le salon, jamais par cette application : si l'app est
     # suspendue, le webhook doit lui survivre.
     discord_webhook_url: str = ""
@@ -168,6 +178,34 @@ class Settings(BaseSettings):
 
     def display_name(self, service: str) -> str:
         return self.service_names.get(service, service.replace("-", " ").title())
+
+    def display_order(self, services: list[str]) -> list[str]:
+        """Trie des identifiants de service pour l'affichage.
+
+        `sorted` est stable : les services inconnus de `HM_SERVICE_ORDER`
+        gardent leur ordre d'arrivée, à la fin.
+        """
+        rank = {service: index for index, service in enumerate(_csv(self.hm_service_order))}
+        return sorted(services, key=lambda service: rank.get(service, len(rank)))
+
+    @property
+    def escalate_services(self) -> list[str]:
+        return _csv(self.hm_escalate_services)
+
+    def mention_line(self, affected: list[str]) -> str:
+        """Qui prévenir pour cet incident — rien d'autre qu'une chaîne de texte.
+
+        Le rôle est prévenu à chaque fois ; le `@here` ne part que si un service
+        visible de l'utilisateur est touché. Les deux sont de la configuration :
+        aucune liste de services n'est écrite dans le rendu (§6).
+        """
+        mentions = []
+        if self.discord_alert_role_id:
+            mentions.append(f"<@&{self.discord_alert_role_id}>")
+        escalate = set(self.escalate_services)
+        if any(service in escalate for service in affected or []):
+            mentions.append("@here")
+        return " / ".join(mentions)
 
     @property
     def bs_resource_map(self) -> dict[str, str]:

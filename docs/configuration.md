@@ -41,6 +41,7 @@ aucune alerte ne peut partir : tout finit dans la file de rattrapage.
 | `HM_SERVICES` | `moddy-bot,moddy-api,moddy-altguard,moddy-feeds` | Liste exhaustive des services attendus |
 | `HM_CRITICAL_SERVICES` | `moddy-bot,moddy-api` | Filtrée sur `HM_SERVICES` ; détermine partial vs major |
 | `HM_SERVICE_NAMES` | — | `id:Nom d'affichage`, séparés par `,`. Des défauts existent pour les services Moddy |
+| `HM_SERVICE_ORDER` | `moddy-bot,moddy-dashboard,moddy-api,moddy-altguard,moddy-feeds` | Ordre d'affichage — sticky, panneau, `/v1/status`. Un service absent passe après, dans son ordre d'origine |
 | `HM_IMPACT_MAP` | `moddy-bot>*;moddy-api>moddy-website,moddy-dashboard=down,moddy-bot` | Propagation d'impact |
 | `HM_HEARTBEAT_TTL` | `60` | TTL de `hm:hb:{service}` — trois fois l'intervalle d'émission |
 | `HM_CHECK_INTERVAL` | `15` | Période de la boucle de détection |
@@ -131,13 +132,15 @@ parfaitement fonctionnel sur Discord seul.
 | `DISCORD_GUILD_ID` | — | Serveur ; les commandes y sont synchronisées, et les `/status` refusées ailleurs |
 | `DISCORD_STATUS_CHANNEL_ID` | — | Salon du sticky et des incidents |
 | `DISCORD_STAFF_ROLE_ID` | — | Rôle autorisé sur `/status *`. Vide ⇒ repli sur la permission `manage_guild` |
+| `DISCORD_ALERT_ROLE_ID` | `1424466344832925847` | Rôle prévenu à chaque incident publié. Vide ⇒ aucune mention de rôle |
+| `HM_ESCALATE_SERVICES` | `moddy-bot,moddy-dashboard,moddy-api` | Services dont la panne ajoute un `@here` à la mention |
 | `DISCORD_WEBHOOK_URL` | — | Second maillon de la redondance, **créé à la main** dans le salon |
 | `DISCORD_STATUS_PAGE_URL` | `https://status.moddy.app` | Base des URLs d'incident reconstruites, et bouton du sticky |
 | `HM_BOT_ACK_TIMEOUT` | `5` | Secondes avant de considérer que le bot n'a pas pris et de basculer webhook |
 | `HM_STICKY_ENABLED` | `true` | Poster et maintenir le sticky |
 | `HM_STICKY_DEBOUNCE` | `5` | Secondes avant repost, après un message tiers dans le salon |
 | `HM_STICKY_REFRESH_INTERVAL` | `120` | Période de rafraîchissement passif du sticky |
-| `HM_REFRESH_COOLDOWN` | `5` | Anti-spam du bouton `Refresh`, par utilisateur |
+| `HM_REFRESH_COOLDOWN` | `5` | Anti-spam du bouton `Details`, par utilisateur |
 
 Le bot n'est construit que si `DISCORD_TOKEN` **et** `DISCORD_STATUS_CHANNEL_ID`
 sont renseignés (`Settings.bot_enabled`).

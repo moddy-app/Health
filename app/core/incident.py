@@ -148,6 +148,7 @@ class IncidentManager:
         bs_report_id: str | None = None,
         url: str | None = None,
         fingerprint: str | None = None,
+        publish_betterstack: bool = True,
     ) -> dict:
         now = iso()
         incident: dict = {
@@ -176,7 +177,8 @@ class IncidentManager:
             incident["ends_at"] = ends_at
 
         statuses = statuses or {s: DOWN for s in affected}
-        await self._publish_betterstack(incident, message, statuses=statuses, notify=notify)
+        if publish_betterstack:
+            await self._publish_betterstack(incident, message, statuses=statuses, notify=notify)
         await self._save(incident)
         incident = await self._notifier.dispatch(incident)
         await self._save(incident)
@@ -436,6 +438,7 @@ class IncidentManager:
             "report_type": "maintenance" if payload.get("event_type") == "maintenance" else "manual",
             "starts_at": node.get("starts_at"),
             "ends_at": node.get("ends_at"),
+            "affected_resources": node.get("affected_resources") or [],
         }
         await process_report(
             self._bs,
@@ -461,7 +464,12 @@ class IncidentManager:
 
         for report in snapshot.reports:
             updates = [
-                {"id": u["id"], "message": u["message"], "at": u.get("published_at")}
+                {
+                    "id": u["id"],
+                    "message": u["message"],
+                    "at": u.get("published_at"),
+                    "affected_resources": u.get("affected_resources") or [],
+                }
                 for u in report.get("updates") or []
             ]
             if not updates:
@@ -534,16 +542,29 @@ class IncidentManager:
         # `report_type: automatic` = incident créé par un monitor Better Stack,
         # troisième origine distincte de manual/maintenance.
         is_maintenance = report.get("report_type") == "maintenance"
+
+        # L'incident n'existe que côté Better Stack : ses services affectés sont
+        # des ressources de status page, qu'il faut retraduire. Sans ça, le
+        # message Discord annonçait « Affected services: — ».
+        affected, statuses = self._bs.services_for(
+            update.get("affected_resources") or report.get("affected_resources") or []
+        )
+        level = colors.MAINTENANCE if is_maintenance else _level_for(statuses)
+
         await self.open(
             title=report.get("title") or "Incident",
             message=update.get("message") or "",
-            level=colors.MAINTENANCE if is_maintenance else colors.PARTIAL_OUTAGE,
-            affected=[],
+            level=level,
+            affected=affected,
             origin="betterstack",
             author="Better Stack",
             type_=TYPE_MAINTENANCE if is_maintenance else TYPE_INCIDENT,
             bs_report_id=report_id,
             url=report.get("url") or self._url_for(report_id),
+            statuses=statuses,
+            # Le report existe déjà là-bas : lui renvoyer son propre message
+            # ouvrirait une boucle.
+            publish_betterstack=False,
         )
 
     async def webhook_seems_dead(self) -> bool:
@@ -599,6 +620,20 @@ async def _ignore(report: dict, update: dict) -> None:
     return None
 
 
+def _level_for(statuses: dict[str, str]) -> str:
+    """Sévérité déduite de l'état des ressources d'un incident adopté.
+
+    Faute de ressource lisible, on reste sur `partial_outage` : un incident
+    publié sur la status page n'est jamais anodin.
+    """
+    values = set(statuses.values())
+    if DOWN in values:
+        return colors.PARTIAL_OUTAGE
+    if "degraded" in values:
+        return colors.DEGRADED
+    return colors.PARTIAL_OUTAGE
+
+
 def _fingerprint(level: str, effective: dict[str, str]) -> str:
     """Signature de l'état observé : le niveau global, et l'état de chaque service.
 
@@ -631,4 +666,7 @@ def _normalize_update(update: dict) -> dict:
         "id": update.get("id"),
         "message": update.get("body") or update.get("message") or "",
         "at": update.get("created_at") or update.get("published_at") or iso(),
+        "affected_resources": update.get("affected_resources")
+        or update.get("affected_components")
+        or [],
     }

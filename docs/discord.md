@@ -122,18 +122,66 @@ Tout message du bot est un message **Components V2** — jamais de contenu texte
 nu, jamais d'embed (sauf le repli webhook). Les réponses éphémères des commandes
 elles-mêmes passent par `build_notice_view`.
 
-Trois icônes, pas une de plus :
+Un jeu d'icônes fermé, en trois familles qui ne se mélangent jamais.
+
+**État d'un service ou d'un niveau** — titre d'incident, sticky, panneau :
 
 | Icône | Usage |
 |---|---|
-| `<:check_circle:1541616428657016926>` | résolu, service opérationnel |
-| `<:error:1541616427197530203>` | incident en cours, service down |
-| `<a:spinner:1541617132104843264>` | maintenance, service dégradé, état inconnu |
+| `<:check_circle:1541801328584433664>` | opérationnel, incident résolu |
+| `<:down:1541799254807543808>` | service down, panne partielle ou majeure |
+| `<:degraded:1541799158938083430>` | performance dégradée |
+| `<:maintenance:1541798162833080320>` | maintenance |
+
+**Ligne « Status: » d'un incident**, et elle seule — jamais dans un titre,
+jamais dans une liste de services :
+
+| Icône | Usage |
+|---|---|
+| `<:OnGoing:1541798161599828038>` | `Status: On Going` |
+| `<:Resolved:1541798160278749244>` | `Status: Resolved` |
+
+**Réponses éphémères du bot et détail des checks**, en blanc : un accusé de
+réception n'est pas un état public.
+
+| Icône | Usage |
+|---|---|
+| `<:check_circle_white:1541799862859989052>` | confirmation, check qui passe |
+| `<:exclamation:1541799657829568582>` | refus, erreur, check en échec, état inconnu |
+| `<a:spinner:1541617132104843264>` | chargement |
+
+Le liseré (`accent_color`) suit le niveau : `#379057` résolu, `#FF8C00`
+dégradé, `#E92B2B` down, `#5985E1` maintenance.
 
 Ils doivent être uploadés en **application emojis** sur l'application Health
 Monitor, via le portail développeur. C'est la seule option qui garantisse un
 rendu correct dans les deux chemins d'envoi : un émoji appartenant à un serveur
 que l'application ne connaît pas s'affiche cassé côté webhook.
+
+### Mentions
+
+Le message d'incident prévient lui-même, en petit, sous l'en-tête :
+
+```
+**Status:** <:OnGoing:...>On Going
+-# <@&1424466344832925847> / @here
+```
+
+`DISCORD_ALERT_ROLE_ID` est mentionné à chaque incident ; le `@here` ne
+s'ajoute que si l'incident touche un service de `HM_ESCALATE_SERVICES` — le
+bot, le dashboard ou l'API, ce qu'un utilisateur voit tomber. Une panne de
+Feeds ne réveille pas le salon. Aucune de ces deux listes n'est écrite dans le
+rendu : `Settings.mention_line()` rend une chaîne, le renderer l'affiche (§6).
+
+- **La mention vit dans le message, pas à côté.** Discord ne repingue pas à
+  l'édition : l'alerte part une fois, à la publication, et les updates qui
+  suivent réutilisent le même message sans re-notifier.
+- **Le repli embed la porte en `content`.** Une mention placée dans un embed ne
+  prévient personne, et un message Components V2 n'a pas le droit d'avoir de
+  `content` : c'est donc uniquement dans le repli que `content` est rempli.
+- **Permission requise.** Sans `Mention @everyone, @here and All Roles`, le
+  `@here` s'affiche sans prévenir personne — et le rôle aussi, s'il n'est pas
+  lui-même mentionnable.
 
 ### Container 1 — en-tête
 
@@ -226,9 +274,10 @@ Un message permanent en bas du salon, avec une ligne par service :
 -# Last updated <t:1787000000:R>
 
 <:check_circle:...> ``Moddy Bot``  Operational
-<:check_circle:...> ``API      ``  Operational
+<:check_circle:...> ``Dashboard``  Operational
+<:degraded:...>     ``API      ``  Degraded
 ──────────────────────────
-[ Refresh ]  [ Status Page ]
+[ Details ]  [ Status Page ]
 ```
 
 Trois déclencheurs le font bouger, et ils peuvent tomber ensemble :
@@ -273,15 +322,41 @@ Trois déclencheurs le font bouger, et ils peuvent tomber ensemble :
   plutôt que reposté. Un sticky qui n'est pas tout en bas vaut mieux qu'un salon
   saturé.
 
-## Bouton Refresh
+## Bouton Details
 
 Vue persistante, `custom_id` fixe `hm:sticky:refresh`, réenregistrée au
 démarrage par `add_view` dans `setup_hook`. Sans ça le bouton est mort après
-chaque redéploiement — et Railway redéploie souvent.
+chaque redéploiement — et Railway redéploie souvent. Le libellé est passé de
+`Refresh` à `Details` ; le `custom_id`, lui, ne bouge pas : c'est à lui que le
+sticky se reconnaît dans le salon, et le changer abandonnerait tous les stickys
+déjà postés.
 
-Sa réponse est **éphémère et plus détaillée que le sticky** : version, uptime,
-âge du dernier heartbeat, contenu de `checks`, services impactés par ricochet.
-C'est l'outil de diagnostic rapide pendant une crise.
+Sa réponse est **éphémère et plus détaillée que le sticky** : un bloc par
+service — version, uptime, âge du dernier heartbeat, services impactés par
+ricochet — séparés les uns des autres, et son propre bouton `Refresh` qui
+rejoue le panneau sur place (vue persistante elle aussi).
+
+```
+### <:check_circle:...> All Systems Operational
+-# Last updated <t:1787000000:R>
+──────────────────────────
+<:check_circle:...> **Moddy Bot** · Operational
+-# `1.4.2` · up 2h01 · heartbeat 13s ago
+-# <:check_circle_white:...> 3 checks passing
+──────────────────────────
+<:degraded:...> **API** · Degraded
+-# `2.0.0` · up 0h05 · heartbeat 11s ago
+-# <:exclamation:...> redis · 1/2 passing
+```
+
+**Les checks se résument, ils ne se dumpent pas.** Le panneau affichait
+`postgres: {'ok': True, 'latency_ms': 4} · redis: {...}` — illisible. En régime
+normal un compteur suffit ; en panne, seuls les checks en échec sont nommés.
+Seule la clé `ok`, qui fait partie du contrat de heartbeat, est lue : les noms
+de clés restent libres (§6).
+
+L'ordre des services vient de `HM_SERVICE_ORDER`, pas de l'ordre de
+surveillance : on montre d'abord ce que voit un utilisateur.
 
 Elle lit `hm:status:public` et `hm:hb:{service}` **directement dans Redis**,
 jamais par un appel HTTP à `/v1/status` : viser son propre process ajouterait un

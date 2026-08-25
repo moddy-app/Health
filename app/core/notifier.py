@@ -130,7 +130,11 @@ class Notifier:
         ):
             return True
 
-        presentation = IncidentPresentation.from_incident(incident, self._s.service_names)
+        presentation = IncidentPresentation.from_incident(
+            incident,
+            self._s.service_names,
+            mentions=self._s.mention_line(incident.get("affected") or []),
+        )
         message_id = incident.get("discord_message_id")
         transport = incident.get("discord_transport")
 
@@ -164,14 +168,14 @@ class Notifier:
             embed = build_raw_embed(presentation)
             sent_id = None
             if message_id and transport == "webhook":
-                if await self._webhook.edit(message_id, components, embed):
+                if await self._webhook.edit(message_id, components, embed, presentation.mentions):
                     sent_id = message_id
                 else:
                     log.warning("édition webhook impossible, repost d'un message neuf")
             if sent_id is None:
                 # Un message posté par le bot n'est pas éditable via webhook :
                 # on en poste un nouveau plutôt que de perdre l'information.
-                sent_id = await self._webhook.send(components, embed)
+                sent_id = await self._webhook.send(components, embed, presentation.mentions)
             if sent_id:
                 await self._mark_sent(incident, "webhook")
                 incident["discord_message_id"] = sent_id

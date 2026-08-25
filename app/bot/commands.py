@@ -11,12 +11,10 @@ import logging
 import discord
 from discord import app_commands
 
-from .. import keys
 from ..render import colors, theme
 from ..render.layout import build_notice_view
-from ..render.model import StatusPresentation
 from . import modals
-from .views import build_detail_view
+from .views import build_detail_view, load_status
 
 log = logging.getLogger("hm.bot.commands")
 
@@ -74,13 +72,7 @@ class StatusCommands(app_commands.Group):
     @app_commands.command(name="check", description="Detailed status, only visible to you")
     @staff_only()
     async def check(self, interaction: discord.Interaction) -> None:
-        ctx = interaction.client.ctx
-        public = await ctx.store.get_json(keys.STATUS_PUBLIC) or {}
-        snapshot = StatusPresentation.from_public(public)
-        heartbeats = {
-            service.id: (await ctx.store.get_json(keys.hb(service.id)) or {})
-            for service in snapshot.services
-        }
+        snapshot, heartbeats = await load_status(interaction.client.ctx)
         await interaction.response.send_message(
             view=build_detail_view(snapshot, heartbeats), ephemeral=True
         )
@@ -91,7 +83,7 @@ class StatusCommands(app_commands.Group):
         await interaction.response.defer(ephemeral=True, thinking=True)
         await interaction.client.sticky.force_repost()
         await interaction.followup.send(
-            view=_notice(f"{theme.EMOJI_RESOLVED} Sticky reposted.", colors.ACCENT_RESOLVED),
+            view=_notice(f"{theme.EMOJI_OK} Sticky reposted.", colors.ACCENT_RESOLVED),
             ephemeral=True,
         )
 
@@ -101,7 +93,7 @@ async def _require_active(interaction: discord.Interaction) -> bool:
     if await interaction.client.ctx.incidents.get_active():
         return True
     await interaction.response.send_message(
-        view=_notice(f"{theme.EMOJI_ONGOING} No active incident.", colors.ACCENT_MAJOR),
+        view=_notice(f"{theme.EMOJI_ALERT} No active incident.", colors.ACCENT_DEGRADED),
         ephemeral=True,
     )
     return False
@@ -110,11 +102,11 @@ async def _require_active(interaction: discord.Interaction) -> bool:
 async def on_tree_error(interaction: discord.Interaction, error: Exception) -> None:
     """Une check qui lève sans réponse laisse l'interaction en échec visible."""
     if isinstance(error, app_commands.CheckFailure):
-        text = f"{theme.EMOJI_ONGOING} Staff only."
+        text = f"{theme.EMOJI_ALERT} Staff only."
         accent = colors.ACCENT_DEGRADED
     else:
         log.exception("commande en échec", exc_info=error)
-        text = f"{theme.EMOJI_ONGOING} The command failed. The monitor logged it."
+        text = f"{theme.EMOJI_ALERT} The command failed. The monitor logged it."
         accent = colors.ACCENT_MAJOR
     view = _notice(text, accent)
     try:

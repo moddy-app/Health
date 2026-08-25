@@ -387,7 +387,7 @@ async def test_an_incident_message_carries_nothing_that_looks_like_a_sticky():
     Si quelqu'un ajoute un composant interactif au message d'incident, ce test
     tombe — et c'est le but.
     """
-    from app.bot.views import REFRESH_ID
+    from app.bot.views import DETAILS_ID
     from app.render.layout import build_layout_view
     from app.render.model import IncidentPresentation
 
@@ -409,7 +409,7 @@ async def test_an_incident_message_carries_nothing_that_looks_like_a_sticky():
             url="https://status.moddy.app/en/incident/995593",
         )
     )
-    assert REFRESH_ID not in custom_ids(view.to_components())
+    assert DETAILS_ID not in custom_ids(view.to_components())
 
 
 async def test_the_sweep_only_ever_touches_stickies(sticky):

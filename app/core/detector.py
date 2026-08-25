@@ -252,6 +252,11 @@ class Detector:
         maintenance = incident if incident and incident.get("type") == "maintenance" else None
         active = None if maintenance else incident
 
+        # L'ordre d'affichage vient de la configuration : le payload est la
+        # seule liste ordonnée que lisent le sticky, le panneau de détail et le
+        # dashboard.
+        ordered = self._s.display_order(list(snapshot.services))
+
         return {
             "status": snapshot.level,
             "updated_at": snapshot.updated_at,
@@ -260,13 +265,13 @@ class Detector:
                     "id": service,
                     "name": self._s.display_name(service),
                     # Ce que vit l'utilisateur, propagation d'impact comprise.
-                    "status": snapshot.effective.get(service, state.status),
+                    "status": snapshot.effective.get(service, snapshot.services[service].status),
                     # Ce que le service dit de lui-même.
-                    "reported": state.status,
+                    "reported": snapshot.services[service].status,
                     "impacted_by": snapshot.impacted_by.get(service, []),
-                    "since": state.since,
+                    "since": snapshot.services[service].since,
                 }
-                for service, state in snapshot.services.items()
+                for service in ordered
             ],
             "incident": _public_incident(active),
             "maintenance": _public_incident(maintenance),

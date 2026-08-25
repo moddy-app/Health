@@ -19,7 +19,7 @@ from .. import keys
 from ..config import Settings
 from ..render.model import StatusPresentation
 from ..state import Store
-from .views import REFRESH_ID, StickyStatusView
+from .views import DETAILS_ID, StickyStatusView
 
 log = logging.getLogger("hm.bot.sticky")
 
@@ -176,7 +176,7 @@ class StickyManager:
             return False
 
     def _is_ours(self, message) -> bool:
-        """Un sticky à nous : posté par le bot, et portant le bouton Refresh.
+        """Un sticky à nous : posté par le bot, et portant le bouton « Details ».
 
         Le `custom_id` distingue le sticky des messages d'incident, que le bot
         poste dans le même salon et qu'il ne faut surtout pas supprimer.
@@ -184,7 +184,7 @@ class StickyManager:
         user = self._bot.user
         if user is None or getattr(message.author, "id", None) != user.id:
             return False
-        return _carries(message.components, REFRESH_ID)
+        return _carries(message.components, DETAILS_ID)
 
     async def _ours(self, channel, limit: int = 50) -> list:
         """Nos stickys encore présents dans le salon, du plus ancien au plus récent."""

@@ -81,8 +81,15 @@ class DiscordWebhook:
     # ------------------------------------------------------------------
     # Envoi
     # ------------------------------------------------------------------
-    async def send(self, components: list[dict], embed: dict | None = None) -> str | None:
-        """Poste un message. Renvoie son ID, ou None si tout a échoué."""
+    async def send(
+        self, components: list[dict], embed: dict | None = None, content: str = ""
+    ) -> str | None:
+        """Poste un message. Renvoie son ID, ou None si tout a échoué.
+
+        `content` ne sert qu'au repli embed : un message Components V2 n'a pas
+        le droit d'en porter, et une mention placée dans un embed ne prévient
+        personne. C'est le seul moyen de garder le ping en mode dégradé.
+        """
         if not self.enabled:
             return None
 
@@ -103,7 +110,9 @@ class DiscordWebhook:
 
         if embed is None:
             return None
-        response = await self._request("POST", f"{self._url}?wait=true", {"embeds": [embed]})
+        response = await self._request(
+            "POST", f"{self._url}?wait=true", _embed_payload(embed, content)
+        )
         if response is not None and response.is_success:
             log.info("message envoyé en repli embed")
             return self._message_id(response)
@@ -115,7 +124,11 @@ class DiscordWebhook:
     # Édition
     # ------------------------------------------------------------------
     async def edit(
-        self, message_id: str, components: list[dict], embed: dict | None = None
+        self,
+        message_id: str,
+        components: list[dict],
+        embed: dict | None = None,
+        content: str = "",
     ) -> bool:
         """PATCH /webhooks/{id}/{token}/messages/{message_id}."""
         if not self.enabled or not message_id:
@@ -144,5 +157,13 @@ class DiscordWebhook:
 
         if embed is None:
             return False
-        response = await self._request("PATCH", base, {"embeds": [embed]})
+        response = await self._request("PATCH", base, _embed_payload(embed, content))
         return bool(response is not None and response.is_success)
+
+
+def _embed_payload(embed: dict, content: str) -> dict:
+    """Corps du repli embed, mention comprise."""
+    payload: dict = {"embeds": [embed]}
+    if content:
+        payload["content"] = content
+    return payload

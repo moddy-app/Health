@@ -61,7 +61,7 @@ app/
 │   ├── client.py      HealthBot : intents, setup_hook, on_ready, on_message
 │   ├── publisher.py   Publication/édition d'incident par le bot
 │   ├── sticky.py      Boucle sticky : debounce, verrou, persistance de l'ID
-│   ├── views.py       StickyStatusView, bouton Refresh persistant
+│   ├── views.py       StickyStatusView, DetailView — vues persistantes
 │   ├── modals.py      Modals V2 : create / update / resolve / maintenance
 │   └── commands.py    Groupe /status, check staff
 │

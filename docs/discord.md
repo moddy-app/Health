@@ -196,7 +196,7 @@ bouton lien.
     {
       "type": 9,
       "accessory": { "type": 2, "style": 5, "label": "View Incident",
-                     "url": "https://status.moddy.app/en/incident/995593" },
+                     "url": "https://status.moddy.app/incident/995593" },
       "components": [
         { "type": 10, "content": "### <:error:...> Major Outage – Bot & API Unavailable" }
       ]

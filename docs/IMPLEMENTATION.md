@@ -447,7 +447,7 @@ Structure : deux containers.
       "type": 9,
       "accessory": {
         "type": 2, "style": 5, "label": "View Incident",
-        "url": "https://status.moddy.app/en/incident/995593"
+        "url": "https://status.moddy.app/incident/995593"
       },
       "components": [
         { "type": 10, "content": "### <:error_circle_white:1534635025629319419> Major Outage – Bot & API Unavailable" }
@@ -703,7 +703,7 @@ Le calcul se fait dans la boucle de check, **pas à la requête**. L'endpoint ne
     "affected": ["moddy-bot"],
     "started_at": "2026-08-24T19:42:00Z",
     "resolved_at": null,
-    "url": "https://status.moddy.app/en/incident/1019848",
+    "url": "https://status.moddy.app/incident/1019848",
     "updates_count": 2,
     "last_update": {
       "at": "2026-08-24T19:55:00Z",

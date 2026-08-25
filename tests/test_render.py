@@ -24,7 +24,7 @@ INCIDENT = {
     "status": "resolved",
     "created_by": "Moddy Health Monitor",
     "affected": ["moddy-bot", "moddy-api", "moddy-dashboard"],
-    "url": "https://status.moddy.app/en/incident/995593",
+    "url": "https://status.moddy.app/incident/995593",
     "created_at": "2026-08-24T19:42:00Z",
     "updates": [
         {"kind": "created", "at": "2026-08-24T19:42:00Z", "message": "Investigating."},

@@ -19,7 +19,7 @@ PUBLIC = {
         {"id": "moddy-bot", "name": "Moddy Bot", "status": "operational"},
         {"id": "moddy-api", "name": "API", "status": "degraded", "impacted_by": ["moddy-bot"]},
     ],
-    "incident": {"title": "Partial Outage", "url": "https://status.moddy.app/en/incident/1"},
+    "incident": {"title": "Partial Outage", "url": "https://status.moddy.app/incident/1"},
 }
 
 

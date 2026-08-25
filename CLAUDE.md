@@ -127,6 +127,14 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
 - **`tree.sync()` global met jusqu'à une heure** à se propager : sync guild.
 - **`status.moddy.app/index.json` renvoie un 302** vers `/en/index.json` : le
   client HTTP doit suivre les redirections.
+- **Les URL d'incident que le monitor construit n'ont pas de segment de
+  langue.** `_url_for` génère `/incident/{id}`, pas `/en/incident/{id}` — la
+  status page choisit elle-même sa langue à l'affichage.
+- **La bannière publique ne nomme un service que si l'appelant est ce
+  service.** `/v1/status/banner?service=<id>` : générique par défaut, le
+  message ne cite le service en cause que si `service` figure dans les
+  affectés — sinon un consommateur non concerné apprendrait quel service
+  interne est en panne.
 - **Better Stack : `ends_at` reste `null` même sur un report résolu**, et
   `report_type` peut valoir `automatic`.
 - **L'ID d'un report va dans `hm:bs:owned` avant tout autre traitement**, sinon

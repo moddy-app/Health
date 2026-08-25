@@ -406,7 +406,7 @@ async def test_an_incident_message_carries_nothing_that_looks_like_a_sticky():
             level="major_outage",
             status="open",
             affected=["Moddy Bot"],
-            url="https://status.moddy.app/en/incident/995593",
+            url="https://status.moddy.app/incident/995593",
         )
     )
     assert DETAILS_ID not in custom_ids(view.to_components())

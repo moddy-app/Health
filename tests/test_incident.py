@@ -430,3 +430,9 @@ async def test_an_adopted_incident_names_its_affected_services(mapped_settings, 
     assert incident["level"] == colors.PARTIAL_OUTAGE
     # Le report existe déjà là-bas : lui renvoyer son propre message bouclerait.
     assert calls == []
+
+
+def test_the_incident_url_has_no_locale_segment(manager):
+    """La status page en tire sa propre langue : pas de `/en/` en dur."""
+    url = manager._url_for("995593")
+    assert url == "https://status.moddy.app/incident/995593"

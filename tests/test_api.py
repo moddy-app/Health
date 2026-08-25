@@ -79,7 +79,78 @@ def test_status_is_cacheable_and_public(client):
 
 def test_banner_is_minimal(client):
     body = client.get("/v1/status/banner").json()
-    assert set(body) == {"level", "title", "url"}
+    assert set(body) == {"level", "title", "url", "message"}
+    assert body["message"] is None
+
+
+async def test_banner_message_is_generic_for_an_unrelated_caller(client):
+    """Un consommateur non concerné n'a pas à savoir quel service interne est en cause."""
+    ctx = client.app.state.ctx
+    await ctx.incidents.open(
+        title="Partial Outage – Moddy Bot Unavailable",
+        message="m",
+        level="partial_outage",
+        affected=["moddy-bot"],
+        origin="discord",
+        url="https://status.moddy.app/incident/1",
+    )
+    # Le cache de `/v1/status` peut avoir été rempli sans incident par la
+    # boucle de fond avant l'ouverture ci-dessus : on force le recalcul.
+    await ctx.store.delete(keys.STATUS_PUBLIC)
+    body = client.get("/v1/status/banner?service=moddy-dashboard").json()
+    assert body["message"] == (
+        "**Some Moddy services** are currently unavailable. "
+        "[View status](https://status.moddy.app/incident/1)"
+    )
+    assert "Moddy Bot" not in body["message"]
+
+
+async def test_banner_message_names_the_caller_when_it_is_affected(client):
+    ctx = client.app.state.ctx
+    await ctx.incidents.open(
+        title="Partial Outage – Moddy Bot Unavailable",
+        message="m",
+        level="partial_outage",
+        affected=["moddy-bot"],
+        origin="discord",
+        url="https://status.moddy.app/incident/1",
+    )
+    await ctx.store.delete(keys.STATUS_PUBLIC)
+    body = client.get("/v1/status/banner?service=moddy-bot").json()
+    assert body["message"] == (
+        "**Moddy Bot** is currently unavailable. "
+        "[View status](https://status.moddy.app/incident/1)"
+    )
+
+
+async def test_banner_message_reflects_degraded_and_maintenance(client):
+    ctx = client.app.state.ctx
+    await ctx.incidents.open(
+        title="Degraded",
+        message="m",
+        level="degraded",
+        affected=["moddy-api"],
+        origin="discord",
+        type_="degraded_performance",
+    )
+    await ctx.store.delete(keys.STATUS_PUBLIC)
+    body = client.get("/v1/status/banner?service=moddy-api").json()
+    assert body["message"] == "**API** is experiencing degraded performance."
+
+    await ctx.incidents.resolve(message="fixed")
+    await ctx.incidents.open(
+        title="Maintenance",
+        message="m",
+        level="maintenance",
+        affected=["moddy-api"],
+        origin="discord",
+        type_="maintenance",
+        starts_at="2026-08-25T02:00:00Z",
+        ends_at="2026-08-25T04:00:00Z",
+    )
+    await ctx.store.delete(keys.STATUS_PUBLIC)
+    body = client.get("/v1/status/banner?service=moddy-api").json()
+    assert body["message"] == "**API** is undergoing scheduled maintenance."
 
 
 def test_rate_limit_kicks_in(client):

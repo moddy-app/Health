@@ -67,7 +67,7 @@ Sans authentification. Destiné au dashboard, au site, et à tout service tiers.
     "resolved_at": null,
     "starts_at": null,
     "ends_at": null,
-    "url": "https://status.moddy.app/en/incident/1019848",
+    "url": "https://status.moddy.app/incident/1019848",
     "updates_count": 2,
     "last_update": { "at": "2026-08-24T19:55:00Z",
                      "message": "We identified the issue and have deployed a fix." }
@@ -91,7 +91,7 @@ et `ends_at` compris — la fenêtre planifiée par `/status maintenance` :
   "resolved_at": null,
   "starts_at": "2026-08-25T02:00:00Z",
   "ends_at": "2026-08-25T04:00:00Z",
-  "url": "https://status.moddy.app/en/incident/1019849",
+  "url": "https://status.moddy.app/incident/1019849",
   "updates_count": 1,
   "last_update": { "at": "2026-08-25T01:30:00Z",
                    "message": "We are performing scheduled maintenance on the API." }
@@ -153,20 +153,48 @@ détecteur, puis remise en cache.
 
 Payload minimal pour la bannière du dashboard.
 
+```
+GET /v1/status/banner?service=moddy-dashboard
+```
+
 ```json
 { "level": "partial_outage",
   "title": "Partial Outage – Moddy Bot Unavailable",
-  "url": "https://status.moddy.app/en/incident/1019848" }
+  "url": "https://status.moddy.app/incident/1019848",
+  "message": "**Some Moddy services** are currently unavailable. [View status](https://status.moddy.app/incident/1019848)" }
 ```
 
 Sans incident ni maintenance :
 
 ```json
-{ "level": "operational", "title": null, "url": null }
+{ "level": "operational", "title": null, "url": null, "message": null }
 ```
 
 `level` porte le niveau de l'incident en cours s'il y en a un, sinon le niveau
 global des services.
+
+### `message`
+
+Markdown prêt à afficher — la bannière le rend tel quel. **En gras** l'essentiel,
+et un lien `[View status](url)` vers l'incident ou la maintenance quand une URL
+existe. Générique par défaut :
+
+```
+**Some Moddy services** are currently unavailable. [View status](...)
+```
+
+`?service=<id>` identifie l'appelant. S'il figure dans les services affectés,
+le message le nomme au lieu de rester générique :
+
+```
+**Moddy Bot** is currently unavailable. [View status](...)
+```
+
+Une maintenance ou une dégradation changent le verbe (« is undergoing scheduled
+maintenance », « is experiencing degraded performance »), jamais le principe :
+un service qui n'est pas concerné n'a pas à apprendre lequel l'est. Un
+`service` absent, inconnu, ou non affecté retombe toujours sur le générique —
+jamais d'erreur.
 
 ---
 

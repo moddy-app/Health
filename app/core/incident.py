@@ -32,6 +32,19 @@ def _type_for(level: str) -> str:
     return TYPE_DEGRADED if level == colors.DEGRADED else TYPE_INCIDENT
 
 
+def _bs_report_type(incident: dict) -> str:
+    """Type du report Better Stack qui porte cet incident.
+
+    Retenu à la création (`bs_report_type`) ; déduit du type de l'incident tant
+    que le report n'existe pas. C'est lui, et pas le niveau, qui décide des
+    états acceptés sur les ressources affectées.
+    """
+    stored = incident.get("bs_report_type")
+    if stored:
+        return str(stored)
+    return TYPE_MAINTENANCE if incident.get("type") == TYPE_MAINTENANCE else "manual"
+
+
 class IncidentManager:
     def __init__(
         self, settings: Settings, store: Store, betterstack: BetterStack, notifier: Notifier
@@ -94,9 +107,10 @@ class IncidentManager:
         if not self._bs.enabled:
             return
         level = incident.get("level", colors.MAJOR_OUTAGE)
+        report_type = _bs_report_type(incident)
 
         affected = incident.get("affected") or []
-        resources = self._bs.resources_for(affected, statuses, level)
+        resources = self._bs.resources_for(affected, statuses, level, report_type=report_type)
         if not resources:
             log.warning("aucune ressource Better Stack mappée pour %s", affected)
             return
@@ -111,7 +125,6 @@ class IncidentManager:
             )
             return
 
-        report_type = TYPE_MAINTENANCE if incident.get("type") == TYPE_MAINTENANCE else "manual"
         report_id = await self._bs.create_report(
             title=incident.get("title") or "Incident",
             message=message,
@@ -124,6 +137,9 @@ class IncidentManager:
         )
         if report_id:
             incident["bs_report_id"] = report_id
+            # Le type du report conditionne l'état autorisé sur *tous* ses
+            # updates : on le retient plutôt que de le redéduire à chaque fois.
+            incident["bs_report_type"] = report_type
             incident["url"] = incident.get("url") or self._url_for(report_id)
 
     # ------------------------------------------------------------------
@@ -144,6 +160,7 @@ class IncidentManager:
         starts_at: str | None = None,
         ends_at: str | None = None,
         bs_report_id: str | None = None,
+        bs_report_type: str | None = None,
         url: str | None = None,
         fingerprint: str | None = None,
         publish_betterstack: bool = True,
@@ -152,6 +169,7 @@ class IncidentManager:
         incident: dict = {
             "id": incident_id(),
             "bs_report_id": bs_report_id,
+            "bs_report_type": bs_report_type,
             "discord_message_id": None,
             "discord_channel_id": self._s.discord_status_channel_id,
             "discord_transport": None,
@@ -261,12 +279,40 @@ class IncidentManager:
                 message=message,
                 services=incident.get("affected") or [],
                 notify_subscribers=notify,
+                report_type=_bs_report_type(incident),
             )
+            if incident.get("type") == TYPE_MAINTENANCE:
+                await self._close_bs_window(incident, report_id)
 
         incident = await self._notifier.dispatch(incident)
         await self._archive(incident)
         log.info("incident %s résolu", incident.get("id"))
         return incident
+
+    async def _close_bs_window(self, incident: dict, report_id: str) -> None:
+        """Ramène la fenêtre du report de maintenance à maintenant.
+
+        Un report de maintenance n'est pas clos par un update — il n'accepte
+        même pas `resolved`. C'est sa fenêtre qui parle : tant que `ends_at` est
+        dans le futur, la status page continue d'annoncer une maintenance que le
+        staff vient pourtant de clore ou d'annuler. Une maintenance annulée
+        avant d'avoir commencé voit ses deux bornes ramenées : une fenêtre ne
+        peut pas finir avant de commencer.
+        """
+        now = iso()
+        fields = {
+            field: now
+            for field in ("starts_at", "ends_at")
+            # `age_seconds` est négatif tant que la borne est à venir ; absente,
+            # il n'y a rien à refermer.
+            if (age_seconds(incident.get(field)) or 0) < 0
+        }
+        if not fields:
+            return
+        if await self._bs.patch_report(report_id, **fields):
+            log.info("fenêtre de maintenance %s refermée à %s", report_id, now)
+        else:
+            log.warning("fenêtre de maintenance %s non refermée côté Better Stack", report_id)
 
     # ------------------------------------------------------------------
     # Détection automatique
@@ -281,6 +327,17 @@ class IncidentManager:
                 await self._notifier.reset(service)
 
         active = await self.get_active()
+        if active and active.get("type") == TYPE_MAINTENANCE:
+            if not await self._close_expired_maintenance(active):
+                # Une maintenance n'est pas un incident. Pendant sa fenêtre, un
+                # service qui tombe et qui remonte est l'objet même de
+                # l'opération : y empiler « We are currently experiencing a
+                # service outage » dit au public le contraire de ce que le staff
+                # a annoncé. Better Stack refuse d'ailleurs le mélange
+                # (`422 affected_resources is invalid` sur chaque update).
+                return
+            active = None
+
         level = snapshot.level
         # `affected` porte aussi les services dégradés par ricochet ; `failing`
         # ne contient que les causes racines, seules dignes de figurer dans le
@@ -335,6 +392,25 @@ class IncidentManager:
             dedupe=True,
             fingerprint=fingerprint,
         )
+
+    async def _close_expired_maintenance(self, incident: dict) -> bool:
+        """Clôt une maintenance dont la fenêtre est passée. Renvoie `True` si clos.
+
+        Tant que `ends_at` n'est pas dépassé, la maintenance couvre la
+        détection : le monitor se tait. Une fois la fenêtre finie, elle ne
+        couvre plus rien — la laisser ouverte, c'est rendre le monitor aveugle à
+        la première vraie panne qui suit. Sans `ends_at` (maintenance adoptée
+        depuis Better Stack), impossible de dire qu'elle est finie : elle reste
+        au staff.
+        """
+        ends_at = incident.get("ends_at")
+        if not ends_at:
+            return False
+        if (age_seconds(ends_at) or 0) <= 0:
+            return False
+        await self.resolve(message="The scheduled maintenance window has ended.")
+        log.info("maintenance %s close : fenêtre terminée", incident.get("id"))
+        return True
 
     async def _allow_any(self, services: list[str], statuses: dict[str, str]) -> bool:
         """Rate-limit : au moins un service doit être hors de sa fenêtre de 5 min."""
@@ -606,6 +682,9 @@ class IncidentManager:
             author="Better Stack",
             type_=TYPE_MAINTENANCE if is_maintenance else TYPE_INCIDENT,
             bs_report_id=report_id,
+            # `automatic` (incident créé par un monitor Better Stack) suit les
+            # mêmes règles d'états que `manual` : seul `maintenance` diffère.
+            bs_report_type=TYPE_MAINTENANCE if is_maintenance else "manual",
             url=report.get("url") or self._url_for(report_id),
             statuses=statuses,
             # Le report existe déjà là-bas : lui renvoyer son propre message

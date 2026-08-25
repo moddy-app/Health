@@ -104,13 +104,19 @@ def level_emoji(level: str, resolved: bool = False) -> str:
     return EMOJI_BY_LEVEL.get(level, EMOJI_DOWN)
 
 
-def bs_status_for(level: str, service_status: str) -> str:
+def bs_status_for(level: str, service_status: str, report_type: str | None = None) -> str:
     """État Better Stack d'une ressource affectée.
 
-    Le niveau `maintenance` prime : la doc Better Stack impose
-    `status: "maintenance"` quand `report_type: "maintenance"`.
+    C'est le **type du report** qui décide, pas le niveau de l'incident : Better
+    Stack n'accepte `maintenance` que sur un report `maintenance`, et n'y accepte
+    que celui-là. Mélanger les deux vaut un `422 affected_resources is invalid`
+    sur chaque update — constaté en production, en boucle, pendant une
+    maintenance. Le niveau ne sert que quand le type est inconnu (report pas
+    encore créé).
     """
-    if level == MAINTENANCE:
+    if report_type == MAINTENANCE:
+        return BS_MAINTENANCE
+    if report_type is None and level == MAINTENANCE:
         return BS_MAINTENANCE
     if service_status == "down":
         return BS_DOWNTIME

@@ -40,7 +40,7 @@ Base `BETTERSTACK_API_BASE`, header `Authorization: Bearer $BETTERSTACK_TOKEN`.
 |---|---|
 | `report_type` | `manual` ou `maintenance` |
 | `notify_subscribers` | Défaut `false`. Le monitor ne passe `true` que sur `major_outage`, ou si le staff l'a coché |
-| `affected_resources[].status` | `resolved`, `degraded`, `downtime` — ou `maintenance` si `report_type: "maintenance"` |
+| `affected_resources[].status` | `resolved`, `degraded`, `downtime` — **et rien d'autre** ; un `report_type: "maintenance"` n'accepte à l'inverse **que** `maintenance` |
 | `published_at` | Renseigné avec `created_at` de l'incident : après une panne, la file de rattrapage republie avec l'horodatage d'origine |
 | `ends_at` | Obligatoire **uniquement** si `report_type: "maintenance"` |
 
@@ -55,6 +55,13 @@ concernée. Un update sans ressource est refusé côté monitor, avant l'appel.
 
 L'ID de l'update est enregistré dans `hm:bs:seen_updates` dès la réponse `201`,
 pour que l'écho webhook soit ignoré.
+
+**Les deux jeux d'états ne se mélangent jamais.** Poster un `downtime` sur un
+report de maintenance — ou un `maintenance` sur un report `manual` — vaut un
+`422 {"errors":{"affected_resources":["is invalid"]}}`, répété à chaque cycle.
+D'où `bs_report_type`, retenu sur l'incident à la création du report : c'est le
+type du report qui décide de l'état des ressources, jamais le niveau de
+l'incident.
 
 ### Mapping des ressources
 

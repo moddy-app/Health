@@ -184,6 +184,25 @@ def test_cancel_maintenance_reuses_the_resolve_action(ctx):
     assert payload["author"] == "Jules"
 
 
+def test_update_and_resolve_speak_maintenance_when_the_active_one_is_a_maintenance(ctx):
+    """Hors création, les commandes valent pour une maintenance comme pour un
+    incident : la mécanique ne change pas, les mots si."""
+    update = modals.IncidentUpdateModal(ctx, maintenance=True)
+    assert update.action == "incident.update"
+    assert update.title == "Update Maintenance"
+
+    resolve = modals.IncidentResolveModal(ctx, maintenance=True)
+    assert resolve.action == "incident.resolve"
+    assert resolve.title == "Complete Maintenance"
+    assert "maintenance" in resolve.message.component.default.lower()
+
+    # Sans le drapeau, rien ne bouge pour un incident ordinaire.
+    assert modals.IncidentResolveModal(ctx).title == "Resolve Incident"
+    assert modals.IncidentResolveModal(ctx).message.component.default == (
+        "This incident has been resolved."
+    )
+
+
 def test_the_affected_services_come_from_the_configuration():
     """Ajouter un service reste une affaire de variables d'environnement."""
     settings = Settings(redis_url="", hm_services="moddy-bot,acme-thing")

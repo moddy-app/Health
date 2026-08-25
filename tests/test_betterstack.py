@@ -89,6 +89,29 @@ def test_maintenance_forces_the_maintenance_status(bs):
     assert resources[0]["status"] == "maintenance"
 
 
+def test_a_maintenance_report_only_ever_carries_the_maintenance_status(bs):
+    """Better Stack n'accepte que `maintenance` sur un report de maintenance.
+
+    Y compris pour le clore : un `resolved` vaut un 422 sur chaque update.
+    """
+    resources = bs.resources_for(
+        ["moddy-bot"], {"moddy-bot": "operational"}, colors.OPERATIONAL, report_type="maintenance"
+    )
+    assert resources[0]["status"] == "maintenance"
+
+
+def test_a_manual_report_never_carries_the_maintenance_status(bs):
+    """Et réciproquement : `maintenance` sur un report `manual` est refusé.
+
+    Le type du report prime sur le niveau de l'incident — c'est ce que la
+    production a payé en `422 affected_resources is invalid`, toutes les 15s.
+    """
+    resources = bs.resources_for(
+        ["moddy-bot"], {"moddy-bot": "down"}, colors.MAINTENANCE, report_type="manual"
+    )
+    assert resources[0]["status"] == "downtime"
+
+
 async def test_owned_updates_are_relayed_not_adopted(bs, store):
     await bs.mark_owned("995593")
     relayed, adopted = [], []

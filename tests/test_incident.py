@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 
 from app import keys
@@ -10,7 +12,7 @@ from app.core.impact import ImpactGraph
 from app.core.incident import TYPE_DEGRADED, TYPE_MAINTENANCE, IncidentManager
 from app.integrations.betterstack import BetterStack
 from app.render import colors
-from app.util import iso
+from app.util import iso, utcnow
 
 
 class StubNotifier:
@@ -213,6 +215,123 @@ async def test_maintenance_requires_ends_at(manager):
         {"title": "M", "message": "m", "affected": ["moddy-api"], "ends_at": iso()},
     )
     assert (await manager.get_active())["type"] == TYPE_MAINTENANCE
+
+
+async def test_a_maintenance_absorbs_the_detection_instead_of_being_updated(manager, snapshot):
+    """Pendant une maintenance, un service qui tombe est l'objet de l'opération.
+
+    Constaté en production pendant la migration DNS : les services flappaient,
+    et chaque flap collait un « We are currently experiencing a service outage »
+    sous une maintenance annoncée — 28 updates, et autant de 422 côté Better
+    Stack, qui refuse le mélange des deux.
+    """
+    await manager.handle_command(
+        "maintenance.create",
+        {
+            "title": "DNS Migration",
+            "message": "m",
+            "affected": ["moddy-api"],
+            "ends_at": iso(utcnow() + timedelta(hours=1)),
+        },
+    )
+    for status in (DOWN, OPERATIONAL, DOWN):
+        await manager.reconcile(snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": status}))
+
+    incident = await manager.get_active()
+    assert incident["type"] == TYPE_MAINTENANCE
+    assert len(incident["updates"]) == 1
+
+
+async def test_a_finished_maintenance_gives_the_detection_back(manager, snapshot):
+    """Une fois la fenêtre passée, la maintenance ne couvre plus rien.
+
+    La laisser ouverte rendrait le monitor aveugle à la première vraie panne
+    qui suit — et elle continuerait de traîner dans le salon.
+    """
+    await manager.handle_command(
+        "maintenance.create",
+        {
+            "title": "DNS Migration",
+            "message": "m",
+            "affected": ["moddy-api"],
+            "ends_at": iso(utcnow() - timedelta(minutes=1)),
+        },
+    )
+    await manager.reconcile(snapshot(colors.OPERATIONAL, {"moddy-bot": OPERATIONAL}))
+    assert await manager.get_active() is None
+    assert (await manager.history())[0]["type"] == TYPE_MAINTENANCE
+
+    # Et la détection reprend son cours sur l'incident suivant.
+    await manager.reconcile(snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": DOWN}))
+    incident = await manager.get_active()
+    assert incident["origin"] == "auto"
+    assert incident["type"] != TYPE_MAINTENANCE
+
+
+async def test_closing_a_maintenance_early_closes_its_window_too(
+    mapped_settings, store, notifier
+):
+    """Un report de maintenance n'est clos que par sa fenêtre.
+
+    Sans ce PATCH, une maintenance terminée — ou annulée — depuis Discord
+    continue d'être annoncée sur la status page jusqu'à l'heure prévue. Un
+    `resolved` n'y changerait rien : le report ne l'accepte pas.
+    """
+    bs = BetterStack(mapped_settings, store)
+    calls: list[tuple[str, str, dict | None]] = []
+
+    async def fake_request(method, path, payload=None):
+        calls.append((method, path, payload))
+        return {"data": {"id": "1032967", "relationships": {}}}
+
+    bs._request = fake_request
+    manager = IncidentManager(mapped_settings, store, bs, notifier)
+
+    await manager.handle_command(
+        "maintenance.create",
+        {
+            "title": "DNS Migration",
+            "message": "m",
+            "affected": ["moddy-api"],
+            "starts_at": iso(utcnow() + timedelta(hours=1)),
+            "ends_at": iso(utcnow() + timedelta(hours=2)),
+        },
+    )
+    await manager.handle_command("incident.resolve", {"message": "Cancelled.", "author": "Jules"})
+
+    patches = [payload for method, _, payload in calls if method == "PATCH"]
+    assert patches, "la fenêtre doit être refermée côté Better Stack"
+    # Annulée avant d'avoir commencé : une fenêtre ne peut pas finir avant de
+    # commencer, les deux bornes reviennent à maintenant.
+    assert set(patches[0]) == {"starts_at", "ends_at"}
+
+
+async def test_a_maintenance_whose_window_already_passed_is_not_patched(
+    mapped_settings, store, notifier
+):
+    """Rien à refermer : la fenêtre a fait son travail toute seule."""
+    bs = BetterStack(mapped_settings, store)
+    calls: list[str] = []
+
+    async def fake_request(method, path, payload=None):
+        calls.append(method)
+        return {"data": {"id": "1032967", "relationships": {}}}
+
+    bs._request = fake_request
+    manager = IncidentManager(mapped_settings, store, bs, notifier)
+
+    await manager.handle_command(
+        "maintenance.create",
+        {
+            "title": "DNS Migration",
+            "message": "m",
+            "affected": ["moddy-api"],
+            "starts_at": iso(utcnow() - timedelta(hours=2)),
+            "ends_at": iso(utcnow() - timedelta(hours=1)),
+        },
+    )
+    await manager.handle_command("incident.resolve", {"message": "Done.", "author": "Jules"})
+    assert "PATCH" not in calls
 
 
 async def test_history_is_capped(manager, store):

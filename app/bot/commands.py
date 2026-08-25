@@ -50,19 +50,29 @@ class StatusCommands(app_commands.Group):
     async def incident(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(modals.IncidentCreateModal(interaction.client.ctx))
 
-    @app_commands.command(name="update", description="Post an update on the active incident")
+    @app_commands.command(
+        name="update", description="Post an update on the active incident or maintenance"
+    )
     @staff_only()
     async def update(self, interaction: discord.Interaction) -> None:
-        if not await _require_active(interaction):
+        active = await _require_active(interaction)
+        if active is None:
             return
-        await interaction.response.send_modal(modals.IncidentUpdateModal(interaction.client.ctx))
+        await interaction.response.send_modal(
+            modals.IncidentUpdateModal(interaction.client.ctx, maintenance=_is_maintenance(active))
+        )
 
-    @app_commands.command(name="resolve", description="Resolve the active incident")
+    @app_commands.command(
+        name="resolve", description="Resolve the active incident, or close the active maintenance"
+    )
     @staff_only()
     async def resolve(self, interaction: discord.Interaction) -> None:
-        if not await _require_active(interaction):
+        active = await _require_active(interaction)
+        if active is None:
             return
-        await interaction.response.send_modal(modals.IncidentResolveModal(interaction.client.ctx))
+        await interaction.response.send_modal(
+            modals.IncidentResolveModal(interaction.client.ctx, maintenance=_is_maintenance(active))
+        )
 
     @app_commands.command(name="maintenance", description="Schedule a maintenance window")
     @staff_only()
@@ -98,7 +108,7 @@ class StatusCommands(app_commands.Group):
     )
     @staff_only()
     async def reload(self, interaction: discord.Interaction) -> None:
-        if not await _require_active(interaction):
+        if await _require_active(interaction) is None:
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         incident = await interaction.client.ctx.incidents.sync_updates()
@@ -122,15 +132,26 @@ class StatusCommands(app_commands.Group):
         )
 
 
-async def _require_active(interaction: discord.Interaction) -> bool:
-    """`send_modal` ne s'annule pas : on vérifie *avant* de l'envoyer."""
-    if await interaction.client.ctx.incidents.get_active():
-        return True
+def _is_maintenance(incident: dict) -> bool:
+    return incident.get("type") == "maintenance"
+
+
+async def _require_active(interaction: discord.Interaction) -> dict | None:
+    """`send_modal` ne s'annule pas : on vérifie *avant* de l'envoyer.
+
+    Rend l'incident actif — maintenance comprise : hors création, une commande
+    de gestion vaut pour l'un comme pour l'autre, seuls les mots changent.
+    """
+    active = await interaction.client.ctx.incidents.get_active()
+    if active:
+        return active
     await interaction.response.send_message(
-        view=_notice(f"{theme.EMOJI_ALERT} No active incident.", colors.ACCENT_DEGRADED),
+        view=_notice(
+            f"{theme.EMOJI_ALERT} No active incident or maintenance.", colors.ACCENT_DEGRADED
+        ),
         ephemeral=True,
     )
-    return False
+    return None
 
 
 async def _require_active_maintenance(interaction: discord.Interaction) -> bool:

@@ -177,6 +177,29 @@ affectées portent `status: "maintenance"`.
 Couleur neutre (`#5865F2`), pas d'alerte urgente, mais bien présente dans
 `/v1/status` sous la clé `maintenance` pour la bannière du dashboard.
 
+### Une maintenance absorbe la détection, elle ne la subit pas
+
+Tant que la maintenance est active et que `ends_at` n'est pas dépassé,
+`reconcile()` ne touche à rien : ni update, ni résolution. Un service qui tombe
+pendant sa propre maintenance est l'objet de l'opération, pas une panne à
+annoncer — y empiler « We are currently experiencing a service outage » dit au
+public le contraire de ce que le staff vient d'annoncer.
+
+**Une fois `ends_at` passé, la maintenance est close automatiquement** (« The
+scheduled maintenance window has ended. ») et le cycle suivant reprend la
+détection normale. Sans ça, une maintenance oubliée rendrait le monitor aveugle
+à la première vraie panne qui suit. Une maintenance sans `ends_at` — adoptée
+depuis Better Stack — n'est jamais close d'office : elle reste au staff.
+
+### Le type du report décide de l'état des ressources
+
+`report_type: "maintenance"` n'accepte que `status: "maintenance"` sur ses
+ressources affectées, et le refuse partout ailleurs. Le champ `bs_report_type`
+retient donc le type du report **à sa création** et c'est lui, jamais le niveau
+de l'incident, qui décide de l'état publié (`colors.bs_status_for`). Y compris
+pour clore une maintenance : elle se termine par sa fenêtre, pas par un
+`resolved` que l'API rejetterait.
+
 ## Commandes du staff
 
 `IncidentManager.handle_command(action, payload)` :

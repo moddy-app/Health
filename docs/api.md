@@ -65,12 +65,36 @@ Sans authentification. Destiné au dashboard, au site, et à tout service tiers.
     "affected": ["moddy-bot", "moddy-api", "moddy-website", "moddy-dashboard"],
     "started_at": "2026-08-24T19:42:00Z",
     "resolved_at": null,
+    "starts_at": null,
+    "ends_at": null,
     "url": "https://status.moddy.app/en/incident/1019848",
     "updates_count": 2,
     "last_update": { "at": "2026-08-24T19:55:00Z",
                      "message": "We identified the issue and have deployed a fix." }
   },
   "maintenance": null
+}
+```
+
+Une maintenance en cours remplit `maintenance` avec la même forme, `starts_at`
+et `ends_at` compris — la fenêtre planifiée par `/status maintenance` :
+
+```json
+"maintenance": {
+  "id": "inc_20260825_0130",
+  "type": "maintenance",
+  "level": "maintenance",
+  "title": "Scheduled Maintenance – API",
+  "message": "We are performing scheduled maintenance on the API.",
+  "affected": ["moddy-api"],
+  "started_at": "2026-08-25T01:30:00Z",
+  "resolved_at": null,
+  "starts_at": "2026-08-25T02:00:00Z",
+  "ends_at": "2026-08-25T04:00:00Z",
+  "url": "https://status.moddy.app/en/incident/1019849",
+  "updates_count": 1,
+  "last_update": { "at": "2026-08-25T01:30:00Z",
+                   "message": "We are performing scheduled maintenance on the API." }
 }
 ```
 
@@ -90,6 +114,12 @@ la bannière utilisateur lit `status`.
 `services[]` ne liste que les services **surveillés** (`HM_SERVICES`). Website et
 Dashboard n'y figurent pas — ils ne poussent pas de heartbeat — mais peuvent
 apparaître dans `incident.affected`.
+
+`starts_at`/`ends_at` ne sont renseignés que pour une maintenance : ils portent
+la fenêtre planifiée (§`/status maintenance`), pas l'horodatage de publication
+— celui-là reste `started_at`. Pour un incident ordinaire, les deux valent
+`null`. Une maintenance qui n'a pas encore été ouverte par le staff
+n'apparaît nulle part : ce champ ne montre que ce qui est déjà publié.
 
 ### `incident` et `maintenance`
 

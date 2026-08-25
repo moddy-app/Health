@@ -292,6 +292,9 @@ def _public_incident(incident: dict | None) -> dict | None:
         "affected": incident.get("affected") or [],
         "started_at": incident.get("created_at"),
         "resolved_at": incident.get("resolved_at"),
+        # La fenêtre planifiée d'une maintenance — absente d'un incident normal.
+        "starts_at": incident.get("starts_at"),
+        "ends_at": incident.get("ends_at"),
         "url": incident.get("url"),
         "updates_count": len(updates),
         "last_update": (

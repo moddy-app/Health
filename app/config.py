@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     hm_services: str = "moddy-bot,moddy-api,moddy-altguard,moddy-feeds"
     hm_critical_services: str = "moddy-bot,moddy-api"
     hm_service_names: str = ""
+    # Ordre d'affichage — sticky, panneau de détail, `/v1/status`. Il n'a pas de
+    # raison de suivre l'ordre de surveillance : on montre d'abord ce qu'un
+    # utilisateur voit (le bot, le dashboard), les briques internes ensuite.
+    # Un service absent de cette liste passe après, dans son ordre d'origine.
+    hm_service_order: str = "moddy-bot,moddy-dashboard,moddy-api,moddy-altguard,moddy-feeds"
     # Propagation d'impact : `source>cible1,cible2`, entrées séparées par `;`,
     # `*` valant « tous les autres services connus ». `=down` sur une cible
     # propage un `down` au lieu du `degraded` par défaut : sans son backend, le
@@ -168,6 +173,15 @@ class Settings(BaseSettings):
 
     def display_name(self, service: str) -> str:
         return self.service_names.get(service, service.replace("-", " ").title())
+
+    def display_order(self, services: list[str]) -> list[str]:
+        """Trie des identifiants de service pour l'affichage.
+
+        `sorted` est stable : les services inconnus de `HM_SERVICE_ORDER`
+        gardent leur ordre d'arrivée, à la fin.
+        """
+        rank = {service: index for index, service in enumerate(_csv(self.hm_service_order))}
+        return sorted(services, key=lambda service: rank.get(service, len(rank)))
 
     @property
     def bs_resource_map(self) -> dict[str, str]:

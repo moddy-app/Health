@@ -35,6 +35,26 @@ def _service_options(settings: Settings) -> list[discord.CheckboxGroupOption]:
     ]
 
 
+def _affected_label(settings: Settings) -> ui.Label:
+    """Le choix des services touchés.
+
+    `max_values` ne peut pas être une constante : Discord exige au moins autant
+    d'options que ce qu'on autorise à cocher, et refuse le modal entier sinon
+    (`options: Must be 10 or more in length`). Avec six services configurés, un
+    `max_values=10` en dur rendait toutes les commandes inutilisables.
+    """
+    options = _service_options(settings)
+    return ui.Label(
+        text="Affected services",
+        component=ui.CheckboxGroup(
+            options=options,
+            min_values=1,
+            max_values=max(len(options), 1),
+            required=True,
+        ),
+    )
+
+
 def _notify_label() -> ui.Label:
     return ui.Label(
         text="Notify subscribers",
@@ -105,7 +125,7 @@ class _StaffModal(ui.Modal):
         if payload is None:
             await interaction.followup.send(
                 view=build_notice_view(
-                    f"{theme.EMOJI_ONGOING} Invalid maintenance window. Expected `{WINDOW_HINT}`.",
+                    f"{theme.EMOJI_ALERT} Invalid maintenance window. Expected `{WINDOW_HINT}`.",
                     accent=colors.ACCENT_MAJOR,
                 ),
                 ephemeral=True,
@@ -116,7 +136,7 @@ class _StaffModal(ui.Modal):
         if incident is None:
             await interaction.followup.send(
                 view=build_notice_view(
-                    f"{theme.EMOJI_ONGOING} Nothing was published. Check the monitor logs.",
+                    f"{theme.EMOJI_ALERT} Nothing was published. Check the monitor logs.",
                     accent=colors.ACCENT_MAJOR,
                 ),
                 ephemeral=True,
@@ -127,7 +147,7 @@ class _StaffModal(ui.Modal):
         detail = f"[View on the status page]({url})" if url else "Discord only — Better Stack is unavailable."
         await interaction.followup.send(
             view=build_notice_view(
-                f"{theme.EMOJI_RESOLVED} **{incident.get('title')}**\n-# {detail}",
+                f"{theme.EMOJI_OK} **{incident.get('title')}**\n-# {detail}",
                 accent=colors.ACCENT_RESOLVED,
             ),
             ephemeral=True,
@@ -136,7 +156,7 @@ class _StaffModal(ui.Modal):
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
         log.exception("modal %s en échec", self.action, exc_info=error)
         view = build_notice_view(
-            f"{theme.EMOJI_ONGOING} The command failed. The monitor logged it.",
+            f"{theme.EMOJI_ALERT} The command failed. The monitor logged it.",
             accent=colors.ACCENT_MAJOR,
         )
         if interaction.response.is_done():
@@ -165,12 +185,7 @@ class IncidentCreateModal(_StaffModal, title="Create Incident"):
             component=ui.TextInput(style=discord.TextStyle.paragraph, max_length=1500),
         )
         self.level = _severity_label()
-        self.affected = ui.Label(
-            text="Affected services",
-            component=ui.CheckboxGroup(
-                options=_service_options(ctx.settings), min_values=1, max_values=10, required=True
-            ),
-        )
+        self.affected = _affected_label(ctx.settings)
         self.notify = _notify_label()
         for item in (self.incident_title, self.message, self.level, self.affected, self.notify):
             self.add_item(item)
@@ -256,12 +271,7 @@ class MaintenanceModal(_StaffModal, title="Schedule Maintenance"):
             description=f"Start and end, e.g. {WINDOW_HINT}",
             component=ui.TextInput(style=discord.TextStyle.short, placeholder=WINDOW_HINT),
         )
-        self.affected = ui.Label(
-            text="Affected services",
-            component=ui.CheckboxGroup(
-                options=_service_options(ctx.settings), min_values=1, max_values=10, required=True
-            ),
-        )
+        self.affected = _affected_label(ctx.settings)
         for item in (self.maintenance_title, self.message, self.window, self.affected):
             self.add_item(item)
 

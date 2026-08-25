@@ -121,6 +121,18 @@ async def test_public_payload_shape(detector, store, settings):
     assert payload["services"][1]["name"] == "API"
 
 
+async def test_public_payload_follows_the_configured_display_order(store, settings):
+    """L'ordre d'affichage est une variable d'environnement, pas l'ordre de surveillance."""
+    settings.hm_services = "moddy-feeds,moddy-api,moddy-bot"
+    settings.hm_service_order = "moddy-bot,moddy-api,moddy-feeds"
+    det = Detector(settings, store)
+    await det.load()
+    snapshot = await det.run_cycle()
+
+    payload = det.public_payload(snapshot, None)
+    assert [s["id"] for s in payload["services"]] == ["moddy-bot", "moddy-api", "moddy-feeds"]
+
+
 async def test_public_payload_splits_maintenance(detector, settings, store):
     snapshot = detector.current_snapshot()
     incident = {

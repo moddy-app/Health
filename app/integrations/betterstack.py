@@ -24,6 +24,14 @@ from ..state import Store
 
 log = logging.getLogger("hm.betterstack")
 
+# États d'une ressource Better Stack -> vocabulaire du monitor.
+_SERVICE_STATUS = {
+    colors.BS_DOWNTIME: "down",
+    colors.BS_DEGRADED: "degraded",
+    colors.BS_MAINTENANCE: "maintenance",
+    colors.BS_RESOLVED: "operational",
+}
+
 # Backoff exponentiel plafonné à 5 min (§11).
 _BACKOFF = [2, 4, 8, 16, 32, 64, 128, 300]
 _MAX_ATTEMPTS = 5
@@ -124,6 +132,32 @@ class BetterStack:
                 }
             )
         return out
+
+    def services_for(self, resources: list[dict]) -> tuple[list[str], dict[str, str]]:
+        """Chemin inverse de `resources_for` : ressources -> services, et leur état.
+
+        Un incident créé à la main sur Better Stack ne connaît que des
+        ressources ; sans cette traduction, le monitor le republie avec
+        « Affected services: — ».
+        """
+        reverse = {str(rid): service for service, rid in self._s.bs_resource_map.items()}
+        services: list[str] = []
+        statuses: dict[str, str] = {}
+        for item in resources or []:
+            if not isinstance(item, dict):
+                continue
+            rid = str(
+                item.get("status_page_resource_id")
+                or item.get("status_page_resource")
+                or item.get("id")
+                or ""
+            )
+            service = reverse.get(rid)
+            if not service or service in services:
+                continue
+            services.append(service)
+            statuses[service] = _SERVICE_STATUS.get(str(item.get("status")), "down")
+        return services, statuses
 
     # ------------------------------------------------------------------
     # Anti-boucle

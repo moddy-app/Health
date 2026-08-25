@@ -27,17 +27,21 @@ class Style:
     label: str
 
 
-# Trois icônes pour tout le rendu : en cours, résolu, en attente. Rien d'autre
-# n'est autorisé — le message d'incident doit rester lisible d'un coup d'œil.
+# Les deux icônes de la ligne « Status: », et personne d'autre ne les emploie.
 EMOJI_ONGOING = colors.EMOJI_ONGOING
 EMOJI_RESOLVED = colors.EMOJI_RESOLVED
-EMOJI_PENDING = colors.EMOJI_PENDING
+
+# Icônes des réponses éphémères du bot — un accusé de réception n'est pas un
+# état public, il ne prend donc jamais une icône de service.
+EMOJI_OK = colors.EMOJI_OK
+EMOJI_ALERT = colors.EMOJI_ALERT
+EMOJI_LOADING = colors.EMOJI_LOADING
 
 STATUS_STYLES: dict[str, Style] = {
-    OPEN: Style(colors.ACCENT_MAJOR, EMOJI_ONGOING, "Ongoing"),
-    UPDATING: Style(colors.ACCENT_MAJOR, EMOJI_ONGOING, "Ongoing"),
+    OPEN: Style(colors.ACCENT_MAJOR, EMOJI_ONGOING, "On Going"),
+    UPDATING: Style(colors.ACCENT_MAJOR, EMOJI_ONGOING, "On Going"),
     RESOLVED: Style(colors.ACCENT_RESOLVED, EMOJI_RESOLVED, "Resolved"),
-    MAINTENANCE: Style(colors.ACCENT_MAINTENANCE, EMOJI_PENDING, "Maintenance"),
+    MAINTENANCE: Style(colors.ACCENT_MAINTENANCE, EMOJI_ONGOING, "Maintenance"),
 }
 
 KIND_LABELS: dict[str, str] = {
@@ -47,22 +51,17 @@ KIND_LABELS: dict[str, str] = {
     "scheduled": "Scheduled",
 }
 
-# Libellés publics des états de service, pour le sticky et la vue détaillée.
+# Libellés publics des états de service, pour le sticky et le panneau de détail.
 SERVICE_ICONS: dict[str, str] = {
-    "operational": EMOJI_RESOLVED,
-    "degraded": EMOJI_PENDING,
-    "down": EMOJI_ONGOING,
-    "unknown": EMOJI_PENDING,
-    "maintenance": EMOJI_PENDING,
+    "operational": colors.EMOJI_OPERATIONAL,
+    "degraded": colors.EMOJI_DEGRADED,
+    "down": colors.EMOJI_DOWN,
+    "maintenance": colors.EMOJI_MAINTENANCE,
+    # Un service dont on n'a jamais rien reçu n'est pas en panne : il est muet.
+    "unknown": colors.EMOJI_ALERT,
 }
 
-LEVEL_ICONS: dict[str, str] = {
-    colors.OPERATIONAL: EMOJI_RESOLVED,
-    colors.DEGRADED: EMOJI_PENDING,
-    colors.MAINTENANCE: EMOJI_PENDING,
-    colors.PARTIAL_OUTAGE: EMOJI_ONGOING,
-    colors.MAJOR_OUTAGE: EMOJI_ONGOING,
-}
+LEVEL_ICONS: dict[str, str] = dict(colors.EMOJI_BY_LEVEL)
 
 SERVICE_LABELS: dict[str, str] = {
     "operational": "Operational",
@@ -86,8 +85,8 @@ def accent(level: str, resolved: bool = False) -> int:
     return colors.accent(level, resolved)
 
 
-def emoji(resolved: bool) -> str:
-    return colors.emoji(resolved)
+def level_emoji(level: str, resolved: bool = False) -> str:
+    return colors.level_emoji(level, resolved)
 
 
 def status_style(status: str, type_: str = "") -> Style:
@@ -112,11 +111,16 @@ def service_label(status: str) -> str:
 
 
 def service_icon(status: str) -> str:
-    return SERVICE_ICONS.get(status, EMOJI_PENDING)
+    return SERVICE_ICONS.get(status, colors.EMOJI_ALERT)
 
 
 def level_icon(level: str) -> str:
-    return LEVEL_ICONS.get(level, EMOJI_ONGOING)
+    return LEVEL_ICONS.get(level, colors.EMOJI_DOWN)
+
+
+def check_icon(ok: bool) -> str:
+    """Icône d'un check individuel, dans le panneau de détail (éphémère)."""
+    return EMOJI_OK if ok else EMOJI_ALERT
 
 
 def headline(level: str) -> str:

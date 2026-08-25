@@ -14,7 +14,7 @@ from discord.ext import commands as ext_commands
 
 from ..config import Settings
 from .commands import StatusCommands, on_tree_error
-from .views import StickyStatusView
+from .views import DetailView, StickyStatusView
 
 log = logging.getLogger("hm.bot")
 
@@ -41,9 +41,12 @@ class HealthBot(ext_commands.Bot):
 
     # ------------------------------------------------------------------
     async def setup_hook(self) -> None:
-        # Sans `add_view`, le bouton Refresh est mort après chaque
-        # redéploiement — et Railway redéploie souvent.
+        # Sans `add_view`, les boutons sont morts après chaque redéploiement —
+        # et Railway redéploie souvent. Les deux vues sont concernées : le
+        # sticky reste dans le salon, et un panneau éphémère reste affiché chez
+        # celui qui l'a ouvert.
         self.add_view(StickyStatusView())
+        self.add_view(DetailView())
         self.tree.add_command(StatusCommands())
         self.tree.on_error = on_tree_error
 

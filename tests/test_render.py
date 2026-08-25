@@ -52,24 +52,44 @@ def test_two_containers():
 def test_resolved_incident_is_green_with_check_emoji():
     header, _ = render()
     assert header["accent_color"] == colors.ACCENT_RESOLVED
-    assert colors.EMOJI_RESOLVED in header["components"][0]["components"][0]["content"]
+    assert colors.EMOJI_OPERATIONAL in header["components"][0]["components"][0]["content"]
     assert "**Status:** " + colors.EMOJI_RESOLVED + "Resolved" in header["components"][1]["content"]
 
 
 def test_ongoing_major_outage_is_red():
     header, _ = render(status="open")
     assert header["accent_color"] == colors.ACCENT_MAJOR
-    assert colors.EMOJI_ONGOING in header["components"][0]["components"][0]["content"]
+    assert colors.EMOJI_DOWN in header["components"][0]["components"][0]["content"]
+    assert "**Status:** " + colors.EMOJI_ONGOING + "On Going" in header["components"][1]["content"]
 
 
-def test_only_the_three_allowed_icons_are_used():
-    """Le rendu doit rester sobre : trois icônes, jamais d'émoji décoratif."""
-    allowed = {colors.EMOJI_ONGOING, colors.EMOJI_RESOLVED, colors.EMOJI_PENDING}
+def test_the_title_never_borrows_the_status_icons():
+    """`On Going` et `Resolved` appartiennent à la ligne « Status: », à elle seule."""
+    for status in ("open", "updating", "resolved"):
+        title = render(status=status)[0]["components"][0]["components"][0]["content"]
+        assert colors.EMOJI_ONGOING not in title
+        assert colors.EMOJI_RESOLVED not in title
+
+
+def test_only_the_allowed_icons_are_used():
+    """Le rendu doit rester sobre : aucun émoji hors du jeu de l'application."""
     from app.render import theme
 
+    allowed = {
+        colors.EMOJI_DOWN,
+        colors.EMOJI_DEGRADED,
+        colors.EMOJI_MAINTENANCE,
+        colors.EMOJI_OPERATIONAL,
+        colors.EMOJI_ONGOING,
+        colors.EMOJI_RESOLVED,
+        colors.EMOJI_OK,
+        colors.EMOJI_ALERT,
+        colors.EMOJI_LOADING,
+    }
     used = {style.emoji for style in theme.STATUS_STYLES.values()}
-    assert used <= allowed
+    assert used <= {colors.EMOJI_ONGOING, colors.EMOJI_RESOLVED}
     assert set(theme.SERVICE_ICONS.values()) <= allowed
+    assert set(theme.LEVEL_ICONS.values()) <= allowed
 
 
 def test_maintenance_shows_its_own_status_while_ongoing():

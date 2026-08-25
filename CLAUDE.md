@@ -68,8 +68,12 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
    servir `/v1/status`. `bot/client.py::run` avale tout.
 10. **Un seul modèle de rendu, deux renderers.** Toucher `render/layout.py` sans
     toucher `render/raw.py` fait échouer `test_render_parity.py` — c'est le but.
-11. **Trois icônes, pas une de plus**, et tout message du bot est en
-    Components V2 — jamais de texte nu, jamais d'embed hors repli webhook.
+11. **Le jeu d'icônes est fermé**, et tout message du bot est en Components V2
+    — jamais de texte nu, jamais d'embed hors repli webhook. Trois familles qui
+    ne se mélangent pas : l'état (`check_circle`, `down`, `degraded`,
+    `maintenance`), la ligne « Status: » (`OnGoing`, `Resolved`, et nulle part
+    ailleurs), et les réponses éphémères en blanc (`check_circle_white`,
+    `exclamation`, `spinner`). Voir `render/colors.py`.
 
 ## Pièges déjà rencontrés
 
@@ -84,7 +88,8 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
 - **`send_modal` ne s'annule pas.** `/status update` et `/status resolve`
   vérifient l'incident actif *avant* d'ouvrir le modal.
 - **Une vue persistante sans `add_view` est morte au redéploiement**, et Railway
-  redéploie souvent. Le bouton `Refresh` est réenregistré dans `setup_hook`.
+  redéploie souvent. `StickyStatusView` et `DetailView` sont réenregistrées
+  dans `setup_hook`.
 - **Le sticky sans debounce prend un rate limit**, sans verrou fait des
   doublons, et sans mémoire de ses propres IDs se repost sur lui-même en boucle
   — la gateway livre le `MESSAGE_CREATE` avant que `send()` n'ait rendu l'ID.
@@ -99,6 +104,17 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
   l'autre ne distingue pas `degraded` de `down`.
 - **Les émojis doivent appartenir à l'application** (application emojis), sinon
   le rendu casse dans le chemin webhook.
+- **Le `custom_id` du bouton du sticky ne se renomme pas.** C'est à lui que le
+  sticky se reconnaît dans le salon : le changer abandonne tous les stickys déjà
+  postés. Le libellé, lui, est libre — il dit `Details` depuis qu'il ouvre le
+  panneau de diagnostic, mais l'identifiant reste `hm:sticky:refresh`.
+- **`max_values` d'un `CheckboxGroup` ne peut pas être une constante.** Discord
+  exige au moins autant d'options que ce qu'on autorise à cocher et refuse le
+  modal entier sinon (`options: Must be 10 or more in length`) : toutes les
+  commandes `/status` tombaient en 400.
+- **Un incident adopté depuis Better Stack ne connaît que des ressources.**
+  Sans le chemin inverse de `HM_BS_RESOURCE_MAP`, son message part avec
+  « Affected services: — » ; et le republier vers Better Stack boucle.
 - **`tree.sync()` global met jusqu'à une heure** à se propager : sync guild.
 - **`status.moddy.app/index.json` renvoie un 302** vers `/en/index.json` : le
   client HTTP doit suivre les redirections.
@@ -155,7 +171,7 @@ request sans demande explicite.
 
 ## Reste à faire
 
-Le bot Discord est complet : publication, sticky, bouton `Refresh` persistant,
+Le bot Discord est complet : publication, sticky, bouton `Details` persistant,
 commandes `/status *` et Modals V2. Il n'y a plus rien à faire côté bot Moddy —
 le pubsub Redis qui les reliait a été retiré.
 

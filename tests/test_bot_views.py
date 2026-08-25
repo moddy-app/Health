@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.bot import modals
-from app.bot.views import REFRESH_ID, StickyStatusView, build_detail_view
+from app.bot.views import DETAILS_ID, DETAILS_REFRESH_ID, StickyStatusView, build_detail_view
 from app.config import Settings
 from app.render import colors
 from app.render.model import StatusPresentation
@@ -45,25 +45,34 @@ def test_the_sticky_lists_every_service_with_its_icon():
     text = flatten(view.to_components())
     # Les noms sont alignés sur la plus longue colonne, d'où le remplissage.
     assert "``Moddy Bot``" in text and "``API      ``" in text
-    assert colors.EMOJI_RESOLVED in text and colors.EMOJI_PENDING in text
+    assert colors.EMOJI_OPERATIONAL in text and colors.EMOJI_DEGRADED in text
     assert "Last updated <t:" in text
 
 
 def test_the_sticky_headline_follows_the_global_level():
     view = StickyStatusView(StatusPresentation.from_public(PUBLIC))
     text = flatten(view.to_components())
-    assert text.startswith(f"### {colors.EMOJI_PENDING} Degraded Performance")
+    assert text.startswith(f"### {colors.EMOJI_DEGRADED} Degraded Performance")
 
     healthy = StatusPresentation.from_public({**PUBLIC, "status": "operational", "incident": None})
-    assert colors.EMOJI_RESOLVED in flatten(StickyStatusView(healthy).to_components())
+    assert colors.EMOJI_OPERATIONAL in flatten(StickyStatusView(healthy).to_components())
 
 
-def test_the_refresh_button_survives_a_redeploy():
+def test_the_details_button_survives_a_redeploy():
     """Un `custom_id` fixe et `timeout=None` : sinon le bouton meurt au redéploiement."""
     view = StickyStatusView()
     assert view.timeout is None
     row = view.to_components()[0]["components"][-1]
-    assert row["components"][0]["custom_id"] == REFRESH_ID
+    assert row["components"][0]["custom_id"] == DETAILS_ID
+    assert row["components"][0]["label"] == "Details"
+
+
+def test_the_detail_panel_is_persistent_too():
+    """L'éphémère reste affiché après un redéploiement : son bouton doit vivre."""
+    view = build_detail_view(StatusPresentation.from_public(PUBLIC), {})
+    assert view.timeout is None
+    row = view.to_components()[0]["components"][-1]
+    assert row["components"][0]["custom_id"] == DETAILS_REFRESH_ID
 
 
 def test_the_status_page_button_is_dropped_when_there_is_no_url():
@@ -85,9 +94,29 @@ def test_the_detail_view_shows_heartbeat_diagnostics():
     text = flatten(build_detail_view(snapshot, heartbeats).to_components())
     assert "`1.4.2`" in text
     assert "up 2h01" in text
-    assert "discord: ok" in text
     assert "no heartbeat" in text  # moddy-api n'en a pas
     assert "impacted by moddy-bot" in text
+
+
+def test_the_detail_panel_summarises_healthy_checks():
+    """Le dump brut des dictionnaires était illisible : on compte, sans détailler."""
+    snapshot = StatusPresentation.from_public(PUBLIC)
+    heartbeats = {"moddy-bot": {"checks": {"redis": {"ok": True}, "db": {"ok": True}}}}
+    text = flatten(build_detail_view(snapshot, heartbeats).to_components())
+    assert "2 checks passing" in text
+    assert "{'ok': True}" not in text
+
+
+def test_the_detail_panel_names_only_the_failing_checks():
+    snapshot = StatusPresentation.from_public(PUBLIC)
+    heartbeats = {
+        "moddy-bot": {
+            "checks": {"redis": {"ok": True}, "discord_gateway": {"ok": False, "latency_ms": 900}}
+        }
+    }
+    text = flatten(build_detail_view(snapshot, heartbeats).to_components())
+    assert "discord gateway" in text
+    assert "1/2 passing" in text
 
 
 @pytest.fixture
@@ -111,6 +140,13 @@ def test_the_affected_services_come_from_the_configuration():
     ctx = SimpleNamespace(settings=settings, incidents=None)
     values = [option.value for option in modals.IncidentCreateModal(ctx).affected.component.options]
     assert "acme-thing" in values
+
+
+def test_the_affected_group_never_allows_more_choices_than_it_offers(ctx):
+    """Discord refuse le modal entier si `max_values` dépasse le nombre d'options."""
+    for modal in (modals.IncidentCreateModal(ctx), modals.MaintenanceModal(ctx)):
+        group = modal.affected.component
+        assert 1 <= group.max_values <= len(group.options)
 
 
 @pytest.mark.parametrize(

@@ -199,6 +199,17 @@ Deux gardes, désormais :
 
 Un update relayé vers Discord n'est **jamais** republié vers Better Stack
 (`publish_betterstack=False`) : il y existe déjà, le republier serait la boucle.
+Un incident **adopté** ne l'est pas davantage : il vient de là-bas, son message
+d'ouverture y est déjà.
+
+## Services affectés d'un incident adopté
+
+Un incident ouvert à la main sur la status page ne connaît que des ressources
+Better Stack. Sans traduction inverse, le message Discord annonçait
+« Affected services: — ». `BetterStack.services_for()` fait le chemin retour de
+`resources_for()` via `HM_BS_RESOURCE_MAP`, et le statut de chaque ressource
+(`downtime`, `degraded`) donne au passage la sévérité de l'incident adopté. Une
+ressource non mappée reste invisible côté monitor — comme à l'écriture.
 
 ## Surveiller le surveillant
 

@@ -43,7 +43,7 @@ def header_body(p: IncidentPresentation) -> str:
     return (
         f"**Created by:** {p.created_by}\n"
         f"**Affected services:** {affected}\n"
-        f"**Status:** {p.emoji}{p.status_label}"
+        f"**Status:** {p.status_emoji}{p.status_label}"
     )
 
 

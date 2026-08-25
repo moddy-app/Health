@@ -66,7 +66,16 @@ class IncidentPresentation:
 
     @property
     def emoji(self) -> str:
-        return theme.emoji(self.resolved)
+        """Icône du titre : l'état des services, pas l'avancement de l'incident.
+
+        `On Going` et `Resolved` sont réservés à la ligne « Status: ». Le titre,
+        lui, dit ce qui se passe : down, dégradé, maintenance, ou rétabli.
+        """
+        return theme.level_emoji(self.level, self.resolved)
+
+    @property
+    def status_emoji(self) -> str:
+        return theme.status_style(self.status, self.type).emoji
 
     @property
     def status_label(self) -> str:

@@ -105,40 +105,69 @@ def status_summary(s: StatusPresentation) -> str:
     return "\n".join(lines)
 
 
-def status_detail(s: StatusPresentation, heartbeats: dict[str, dict]) -> str:
-    """Réponse du bouton « Refresh » : plus détaillée que le sticky.
-
-    C'est l'outil de diagnostic rapide pendant une crise — version, uptime, âge
-    du dernier heartbeat et contenu de `checks`, service par service.
-    """
-    blocks = [f"### {s.emoji} {s.headline}", f"-# Last updated <t:{s.timestamp}:R>"]
+def status_header(s: StatusPresentation) -> str:
+    """En-tête du panneau de détail : le niveau global et rien d'autre."""
+    lines = [f"### {s.emoji} {s.headline}", f"-# Last updated <t:{s.timestamp}:R>"]
     if s.incident_title:
         title = f"[{s.incident_title}]({s.incident_url})" if s.incident_url else s.incident_title
-        blocks.append(f"**Ongoing:** {title}")
+        lines.append(f"{theme.EMOJI_ONGOING} **{title}**")
+    return "\n".join(lines)
 
-    for service in s.services:
-        hb = heartbeats.get(service.id) or {}
-        details = []
-        if hb.get("version"):
-            details.append(f"`{hb['version']}`")
-        uptime = hb.get("uptime_s")
-        if uptime is not None:
-            details.append(f"up {int(uptime) // 3600}h{(int(uptime) % 3600) // 60:02d}")
-        age = age_seconds(hb.get("received_at"))
-        details.append(f"hb {int(age)}s ago" if age is not None else "no heartbeat")
-        if service.impacted_by:
-            details.append("impacted by " + ", ".join(service.impacted_by))
 
-        icon = theme.service_icon(service.status)
-        line = f"{icon} **{service.name}** — {service.label}\n-# " + " · ".join(details)
-        checks = hb.get("checks") or {}
-        if checks:
-            # `checks` est un dictionnaire à clés libres : on l'itère, on ne
-            # l'interprète jamais.
-            line += "\n-# " + " · ".join(f"{key}: {value}" for key, value in checks.items())
-        blocks.append(line)
+def _check_ok(value) -> bool:
+    """Un check est en échec quand il le dit lui-même, jamais par déduction.
 
-    return "\n".join(blocks)
+    Les noms de clés restent libres (§6) : seul `ok`, qui fait partie du contrat
+    de heartbeat, est lu. Une valeur d'une autre forme est prise pour bonne —
+    c'est `status` qui décide de l'état du service, pas ce dictionnaire.
+    """
+    if isinstance(value, dict):
+        return bool(value.get("ok", True))
+    if isinstance(value, bool):
+        return value
+    return True
+
+
+def check_summary(checks: dict) -> str | None:
+    """Une ligne pour tous les checks — le détail seulement quand ça casse.
+
+    Le dump brut des dictionnaires était illisible : en régime normal, un
+    compteur suffit ; en panne, ce sont les checks en échec qu'on veut voir, et
+    eux seuls.
+    """
+    if not checks:
+        return None
+    failing = [name for name, value in checks.items() if not _check_ok(value)]
+    if not failing:
+        total = len(checks)
+        return f"{theme.check_icon(True)} {total} check{'s' if total > 1 else ''} passing"
+    names = ", ".join(name.replace("_", " ") for name in failing)
+    return f"{theme.check_icon(False)} {names} · {len(checks) - len(failing)}/{len(checks)} passing"
+
+
+def service_detail(service, hb: dict) -> str:
+    """Le bloc d'un service : état, puis les faits qui l'expliquent.
+
+    C'est l'outil de diagnostic rapide pendant une crise — version, uptime, âge
+    du dernier heartbeat, checks en échec.
+    """
+    facts = []
+    if hb.get("version"):
+        facts.append(f"`{hb['version']}`")
+    uptime = hb.get("uptime_s")
+    if uptime is not None:
+        facts.append(f"up {int(uptime) // 3600}h{(int(uptime) % 3600) // 60:02d}")
+    age = age_seconds(hb.get("received_at"))
+    facts.append(f"heartbeat {int(age)}s ago" if age is not None else "no heartbeat")
+    if service.impacted_by:
+        facts.append("impacted by " + ", ".join(service.impacted_by))
+
+    lines = [f"{theme.service_icon(service.status)} **{service.name}** · {service.label}"]
+    lines.append("-# " + " · ".join(facts))
+    summary = check_summary(hb.get("checks") or {})
+    if summary:
+        lines.append(f"-# {summary}")
+    return "\n".join(lines)
 
 
 def build_notice_view(text: str, *, accent: int | None = None) -> BaseView:

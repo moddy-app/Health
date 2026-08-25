@@ -13,50 +13,95 @@ import discord
 from discord import ui
 
 from .. import keys
-from ..render.layout import BaseView, status_detail, status_summary
+from ..render import colors
+from ..render.layout import (
+    BaseView,
+    build_notice_view,
+    service_detail,
+    status_header,
+    status_summary,
+)
 from ..render.model import StatusPresentation
 
 log = logging.getLogger("hm.bot.views")
 
-REFRESH_ID = "hm:sticky:refresh"
+# Le bouton s'appelle « Details » depuis qu'il ouvre le panneau de diagnostic,
+# mais son `custom_id` ne bouge pas : c'est lui qui identifie les stickys déjà
+# postés dans le salon (`StickyManager._is_ours`). Le renommer abandonnerait
+# tous les stickys d'avant le déploiement.
+DETAILS_ID = "hm:sticky:refresh"
+DETAILS_REFRESH_ID = "hm:details:refresh"
 
 
-class RefreshButton(ui.Button):
-    """Diagnostic rapide en éphémère, lu directement dans Redis.
+async def load_status(ctx) -> tuple[StatusPresentation, dict[str, dict]]:
+    """L'état courant, lu directement dans Redis.
 
     Jamais d'appel HTTP vers `/v1/status` : viser son propre process ajouterait
     un point de panne au moment précis où tout casse.
     """
+    public = await ctx.store.get_json(keys.STATUS_PUBLIC) or {}
+    snapshot = StatusPresentation.from_public(public)
+    heartbeats = {
+        service.id: (await ctx.store.get_json(keys.hb(service.id)) or {})
+        for service in snapshot.services
+    }
+    return snapshot, heartbeats
+
+
+async def _claim_cooldown(interaction: discord.Interaction, ctx) -> bool:
+    """Sans cooldown, le bouton est un vecteur de spam sur un salon public."""
+    cooldown = keys.REFRESH_COOLDOWN.format(user=interaction.user.id)
+    if await ctx.store.claim(cooldown, ctx.settings.hm_refresh_cooldown):
+        return True
+    await interaction.response.send_message(
+        view=build_notice_view(
+            f"{colors.EMOJI_ALERT} Slow down — once every {ctx.settings.hm_refresh_cooldown}s.",
+            colors.ACCENT_DEGRADED,
+        ),
+        ephemeral=True,
+    )
+    return False
+
+
+class DetailsButton(ui.Button):
+    """Ouvre le panneau de diagnostic, en éphémère."""
+
+    def __init__(self) -> None:
+        super().__init__(label="Details", style=discord.ButtonStyle.secondary, custom_id=DETAILS_ID)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        ctx = getattr(interaction.client, "ctx", None)
+        if ctx is None:  # pragma: no cover - le bot est toujours câblé
+            await interaction.response.send_message(
+                view=build_notice_view(f"{colors.EMOJI_ALERT} Monitor not ready.", colors.ACCENT_MAJOR),
+                ephemeral=True,
+            )
+            return
+        if not await _claim_cooldown(interaction, ctx):
+            return
+        snapshot, heartbeats = await load_status(ctx)
+        await interaction.response.send_message(
+            view=DetailView(snapshot, heartbeats), ephemeral=True
+        )
+
+
+class DetailRefreshButton(ui.Button):
+    """Rejoue le panneau sur place, sans en empiler un second."""
 
     def __init__(self) -> None:
         super().__init__(
-            label="Refresh", style=discord.ButtonStyle.secondary, custom_id=REFRESH_ID
+            label="Refresh", style=discord.ButtonStyle.secondary, custom_id=DETAILS_REFRESH_ID
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
         ctx = getattr(interaction.client, "ctx", None)
         if ctx is None:  # pragma: no cover - le bot est toujours câblé
-            await interaction.response.send_message("Monitor not ready.", ephemeral=True)
+            await interaction.response.defer()
             return
-
-        # Sans cooldown, le bouton est un vecteur de spam sur un salon public.
-        cooldown = keys.REFRESH_COOLDOWN.format(user=interaction.user.id)
-        if not await ctx.store.claim(cooldown, ctx.settings.hm_refresh_cooldown):
-            await interaction.response.send_message(
-                f"Slow down — one refresh every {ctx.settings.hm_refresh_cooldown}s.",
-                ephemeral=True,
-            )
+        if not await _claim_cooldown(interaction, ctx):
             return
-
-        public = await ctx.store.get_json(keys.STATUS_PUBLIC) or {}
-        snapshot = StatusPresentation.from_public(public)
-        heartbeats = {
-            service.id: (await ctx.store.get_json(keys.hb(service.id)) or {})
-            for service in snapshot.services
-        }
-        await interaction.response.send_message(
-            view=build_detail_view(snapshot, heartbeats), ephemeral=True
-        )
+        snapshot, heartbeats = await load_status(ctx)
+        await interaction.response.edit_message(view=DetailView(snapshot, heartbeats))
 
 
 class StickyStatusView(BaseView):
@@ -66,20 +111,23 @@ class StickyStatusView(BaseView):
     bouton : `add_view` n'a besoin que des `custom_id`, pas du contenu.
     """
 
-    def __init__(self, snapshot: StatusPresentation | None = None, status_page_url: str = "") -> None:
+    def __init__(
+        self, snapshot: StatusPresentation | None = None, status_page_url: str = ""
+    ) -> None:
         super().__init__()
         container = ui.Container(accent_color=snapshot.accent if snapshot else None)
         if snapshot is not None:
             container.add_item(ui.TextDisplay(status_summary(snapshot)))
             if snapshot.incident_title:
                 container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-                title = snapshot.incident_title
-                container.add_item(ui.TextDisplay(f"**Ongoing:** {title}"))
+                container.add_item(
+                    ui.TextDisplay(f"{colors.EMOJI_ONGOING} **{snapshot.incident_title}**")
+                )
         else:
             container.add_item(ui.TextDisplay("### Status"))
 
         row = ui.ActionRow()
-        row.add_item(RefreshButton())
+        row.add_item(DetailsButton())
         if status_page_url:
             # Un bouton lien sans URL lève à l'envoi.
             row.add_item(
@@ -91,9 +139,39 @@ class StickyStatusView(BaseView):
         self.add_item(container)
 
 
-def build_detail_view(snapshot: StatusPresentation, heartbeats: dict[str, dict]) -> BaseView:
-    view = BaseView()
-    container = ui.Container(accent_color=snapshot.accent)
-    container.add_item(ui.TextDisplay(status_detail(snapshot, heartbeats)))
-    view.add_item(container)
-    return view
+class DetailView(BaseView):
+    """Le panneau de diagnostic : un bloc par service, séparés.
+
+    Persistante elle aussi : son bouton `Refresh` doit survivre au
+    redéploiement, l'éphémère qui le porte, lui, reste affiché.
+    """
+
+    def __init__(
+        self,
+        snapshot: StatusPresentation | None = None,
+        heartbeats: dict[str, dict] | None = None,
+    ) -> None:
+        super().__init__()
+        heartbeats = heartbeats or {}
+        container = ui.Container(accent_color=snapshot.accent if snapshot else None)
+        if snapshot is not None:
+            container.add_item(ui.TextDisplay(status_header(snapshot)))
+            for service in snapshot.services:
+                container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+                container.add_item(
+                    ui.TextDisplay(service_detail(service, heartbeats.get(service.id) or {}))
+                )
+        else:
+            container.add_item(ui.TextDisplay("### Status"))
+
+        container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        row = ui.ActionRow()
+        row.add_item(DetailRefreshButton())
+        container.add_item(row)
+        self.add_item(container)
+
+
+def build_detail_view(
+    snapshot: StatusPresentation, heartbeats: dict[str, dict]
+) -> BaseView:
+    return DetailView(snapshot, heartbeats)

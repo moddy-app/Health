@@ -222,9 +222,9 @@ class Detector:
         """Sévérité agrégée (§4).
 
         Calculée sur les états **observés**, pas sur les états propagés : « un
-        service critique down » doit rester une affirmation exacte. Le résultat
-        serait de toute façon identique, la propagation ne produisant que du
-        `degraded`, et jamais sans qu'un `down` l'ait déclenchée.
+        service critique down » doit rester une affirmation exacte. Un état
+        dérivé n'existe jamais sans qu'un `down` observé l'ait déclenché : la
+        sévérité est donc déjà au moins `degraded` quand la propagation parle.
 
         `unknown` n'entre pas dans le calcul : tant que les seuils ne sont pas
         atteints, un service jamais vu n'est pas encore une panne.

@@ -11,6 +11,11 @@ HM_SERVICES=moddy-bot,moddy-api,moddy-altguard,moddy-feeds
 La liste est **exhaustive et obligatoire**. Sans elle, un service qui n'a jamais
 démarré n'est que du silence, et personne ne le remarque.
 
+S'y ajoutent les services sondés (`HM_PROBE_MAP`) : ceux qui n'ont pas de process
+capable de pousser, et dont le monitor écrit lui-même le heartbeat — voir
+[heartbeat.md](heartbeat.md#les-services-sans-process). Pour tout ce qui suit,
+ils sont des services comme les autres.
+
 ## Machine à états
 
 | État | Condition |
@@ -18,6 +23,7 @@ démarré n'est que du silence, et personne ne le remarque.
 | `operational` | Heartbeat frais + `status: ok` |
 | `degraded` | Heartbeat frais + `status: degraded` |
 | `down` | Heartbeat frais + `status: down`, **ou** clé `hm:hb:{service}` expirée |
+
 | `unknown` | Aucun heartbeat jamais reçu depuis le démarrage du monitor |
 
 L'état est recalculé à chaque cycle (`HM_CHECK_INTERVAL`, 15s) et persisté dans
@@ -81,31 +87,41 @@ Un service qui tombe n'affecte pas que lui-même. `app/core/impact.py` traduit
 les dépendances réelles du produit.
 
 ```env
-HM_IMPACT_MAP=moddy-bot>*;moddy-api>moddy-website,moddy-dashboard,moddy-bot
+HM_IMPACT_MAP=moddy-bot>*;moddy-api>moddy-website,moddy-dashboard=down,moddy-bot
 ```
 
 Syntaxe : `source>cible1,cible2`, entrées séparées par `;`, `*` valant « tous les
-autres services connus ».
+autres services connus ». Une cible peut déclarer la sévérité qu'elle subit avec
+`=down` ; sans suffixe, elle vaut `degraded`. Une cible nommée l'emporte sur le
+joker.
 
 ### Les règles en vigueur
 
 | Ce qui tombe | Conséquence |
 |---|---|
 | **Bot** | Tous les autres services passent `degraded` — le bot *est* le produit |
-| **API / backend** | Website, Dashboard et Bot passent `degraded` |
+| **API / backend** | Dashboard passe **`down`** ; Website et Bot passent `degraded` |
 | **Dashboard** | Aucun impact sur les autres |
 | **AltGuard, Feeds** | Aucun impact sur les trois gros |
 
-### Les deux garde-fous
+Le dashboard est le seul cas de `down` propagé, et il est littéral : sans son
+backend, il n'affiche plus rien. Le dire `degraded` serait mentir à
+l'utilisateur qui a la page blanche sous les yeux. Le site, lui, sert du contenu
+statique : il reste utilisable, donc `degraded`.
+
+### Les trois garde-fous
 
 - **Seul un service `down` propage.** Un `degraded` ne dégrade personne : sinon
   un hoquet du bot repeindrait toute la status page.
-- **La propagation ne produit que du `degraded`.** Elle n'invente jamais un
-  `down` et n'écrase jamais un `down` observé.
+- **Un `down` observé n'est jamais écrasé.** L'état qu'un service constate sur
+  lui-même prime sur ce qu'on déduit de ses dépendances : une sonde de dashboard
+  en échec pendant que l'API va bien donne un `down` sans `impacted_by`.
+- **La propagation lit les états observés, jamais son propre résultat.** Un
+  `down` dérivé ne repart donc pas comme source. Un seul saut, par construction
+  — il n'y a pas de propagation transitive à craindre, même avec `=down`.
 
-Ces deux règles suffisent à interdire les cascades : l'état dérivé plafonne à
-`degraded`, et seul `down` propage. Un seul saut, par construction — il n'y a pas
-de propagation transitive à craindre.
+Quand deux sources touchent la même cible, la plus sévère l'emporte et les deux
+sont créditées dans `impacted_by`.
 
 Cas particulier : un service **surveillé** dont on n'a aucune donnée (`unknown`)
 n'est jamais marqué `degraded` par ricochet. Le déclarer dégradé serait une
@@ -117,14 +133,17 @@ sortent que par l'impact — c'est exactement leur cas d'usage.
 
 Deux ensembles distincts :
 
-- `HM_SERVICES` — ceux qui poussent un heartbeat, listés dans `/v1/status`.
+- `Settings.services` — ceux qui ont un état propre : `HM_SERVICES` (qui
+  poussent un heartbeat) ∪ clés de `HM_PROBE_MAP` (que le monitor sonde). Ce
+  sont eux qui figurent dans `services[]` de `/v1/status`.
 - `Settings.known_services` — l'union de `HM_SERVICES`, des clés de
   `HM_BS_RESOURCE_MAP` et des noms cités dans `HM_IMPACT_MAP`.
 
-Website et Dashboard n'appartiennent qu'au second : ils n'ont pas de heartbeat,
-mais existent comme ressources Better Stack et peuvent être dégradés par
-ricochet. Ils apparaissent donc dans `affected` d'un incident et sur la status
-page, **pas** dans `services[]` de `/v1/status`.
+Le Website n'appartient qu'au second : aucun heartbeat, aucune sonde, mais une
+ressource Better Stack qui peut être dégradée par ricochet. Il apparaît donc
+dans `affected` d'un incident et sur la status page, **pas** dans `services[]` de
+`/v1/status`. Le Dashboard était dans ce cas jusqu'à ce qu'il soit sondé ; il est
+désormais des deux ensembles.
 
 ### Ce que le public voit
 
@@ -153,9 +172,9 @@ services critiques », ce qui redonne le même résultat avec la configuration p
 défaut tout en restant correct si la liste change.
 
 La sévérité est calculée sur les états **observés**, pas sur les états propagés :
-« un service critique down » doit rester une affirmation exacte. Le résultat
-serait de toute façon identique, la propagation ne produisant que du `degraded`
-et jamais sans qu'un `down` l'ait déclenchée.
+« un service critique down » doit rester une affirmation exacte. Un état dérivé
+n'existe jamais sans qu'un `down` observé l'ait déclenché : la sévérité est déjà
+au moins `degraded` quand la propagation parle.
 
 Le `degraded` ne crée **pas** d'incident sur la status page — voir
 [incidents.md](incidents.md#degraded-nest-pas-public).

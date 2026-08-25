@@ -101,6 +101,57 @@ et remonte `is_ready`, la latence gateway et le ratio de shards connectés dans
 `checks`. Un bot prêt mais avec des shards manquants se déclare `degraded`, pas
 `ok`.
 
+## Les services sans process
+
+Un dashboard est un site statique : rien n'y tourne qui puisse pousser un
+heartbeat toutes les 20s. Le modèle push ne s'y applique pas — c'est structurel,
+pas un oubli d'implémentation.
+
+Pour ces services, `app/core/probe.py` fait le chemin inverse : le monitor
+interroge une URL publique et écrit lui-même le heartbeat.
+
+```env
+HM_PROBE_MAP=moddy-dashboard:https://dashboard.moddy.app/healthz
+HM_PROBE_INTERVAL=30
+```
+
+Le contrat de l'endpoint sondé tient en une ligne : **un 2xx signifie vivant.**
+Le corps de la réponse n'est jamais lu, tout le reste (3xx compris) vaut `down`,
+et une URL injoignable écrit un heartbeat `down` plutôt que de laisser la clé
+expirer en silence.
+
+Le résultat est un heartbeat comme un autre :
+
+```json
+{
+  "service": "moddy-dashboard",
+  "status": "ok",
+  "checks": { "http": { "ok": true, "status_code": 200, "latency_ms": 63, "error": null } },
+  "meta": { "source": "probe", "url": "https://dashboard.moddy.app/healthz" }
+}
+```
+
+Il part dans `hm:hb:{service}` comme un heartbeat poussé, avec un TTL de trois
+sondes. **La détection ne sait pas — et n'a pas à savoir — d'où vient
+l'information** : mêmes seuils, mêmes transitions, mêmes alertes. `meta.source`
+n'est là que pour l'humain qui lit la clé.
+
+Un service cité dans `HM_PROBE_MAP` est surveillé sans qu'on ait à le déclarer
+aussi dans `HM_SERVICES` : `Settings.services` fait l'union des deux.
+
+### Et l'invariant « le monitor ne va chercher personne » ?
+
+Il tient. Ce qu'il interdit, c'est de *dépendre* de ce qu'on surveille : pas de
+PostgreSQL partagé, pas d'appel à l'API interne du bot. Ici on interroge une URL
+publique comme le ferait n'importe quel navigateur, et l'échec de la sonde ne
+fait rien d'autre qu'écrire `down`. C'est exactement ce que fait déjà un monitor
+Better Stack de son côté — à ceci près que le résultat alimente aussi
+`/v1/status`.
+
+Un état propre l'emporte toujours sur un état déduit : si la sonde du dashboard
+échoue alors que l'API va bien, le dashboard est `down` **de son propre chef**,
+et son `impacted_by` reste vide.
+
 ## Vérifier à la main
 
 ```bash

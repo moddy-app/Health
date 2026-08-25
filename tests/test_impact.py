@@ -52,12 +52,19 @@ def test_bot_down_degrades_everything(graph):
     assert impacted_by["moddy-api"] == ["moddy-bot"]
 
 
-def test_api_down_degrades_website_dashboard_and_bot(graph):
+def test_api_down_takes_the_dashboard_down_with_it(graph):
+    """Sans son backend, le dashboard n'affiche plus rien : il est down, pas dégradé."""
     effective, impacted_by = graph.apply(down(**{"moddy-api": "down"}))
 
     assert effective["moddy-api"] == "down"
+    assert effective["moddy-dashboard"] == "down"
+    assert impacted_by["moddy-dashboard"] == ["moddy-api"]
+
+
+def test_api_down_degrades_website_and_bot(graph):
+    effective, impacted_by = graph.apply(down(**{"moddy-api": "down"}))
+
     assert effective["moddy-website"] == "degraded"
-    assert effective["moddy-dashboard"] == "degraded"
     assert effective["moddy-bot"] == "degraded"
     # Les petits services ne dépendent pas de l'API.
     assert effective["moddy-altguard"] == "operational"
@@ -66,7 +73,7 @@ def test_api_down_degrades_website_dashboard_and_bot(graph):
 
 
 def test_dashboard_down_impacts_nobody(graph):
-    # Le dashboard ne pousse pas de heartbeat : on force son état à la main.
+    # Le dashboard n'est ici surveillé par personne : on force son état à la main.
     observed = {**down(), "moddy-dashboard": "down"}
     effective, impacted_by = graph.apply(observed)
 
@@ -99,7 +106,8 @@ def test_degraded_does_not_propagate(graph):
     assert impacted_by == {}
 
 
-def test_propagation_never_creates_a_down(graph):
+def test_propagation_creates_a_down_only_where_the_rule_says_so(graph):
+    """Le joker du bot dégrade ; seule une cible marquée `=down` tombe."""
     effective, _ = graph.apply(down(**{"moddy-bot": "down"}))
     assert list(effective.values()).count("down") == 1
 
@@ -108,6 +116,36 @@ def test_an_observed_down_is_never_overwritten(graph):
     effective, impacted_by = graph.apply(down(**{"moddy-bot": "down", "moddy-api": "down"}))
     assert effective["moddy-api"] == "down"
     assert "moddy-api" not in impacted_by
+
+
+def test_an_own_failure_beats_the_propagated_one(graph):
+    """Le dashboard tombé de son propre chef reste sa propre cause, pas un dégât collatéral."""
+    observed = {**down(**{"moddy-api": "down"}), "moddy-dashboard": "down"}
+    effective, impacted_by = graph.apply(observed)
+
+    assert effective["moddy-dashboard"] == "down"
+    assert "moddy-dashboard" not in impacted_by
+
+
+def test_a_propagated_down_does_not_propagate_in_turn(prod_settings):
+    """Un seul saut : le `down` dérivé du dashboard ne repart pas comme source."""
+    graph = ImpactGraph(
+        "moddy-api>moddy-dashboard=down;moddy-dashboard>moddy-feeds=down",
+        prod_settings.known_services,
+        monitored=prod_settings.services,
+    )
+    effective, _ = graph.apply(down(**{"moddy-api": "down"}))
+
+    assert effective["moddy-dashboard"] == "down"
+    assert effective["moddy-feeds"] == "operational"
+
+
+def test_a_down_rule_upgrades_an_already_degraded_target(graph):
+    """Deux sources, la plus sévère l'emporte, et les deux sont créditées."""
+    effective, impacted_by = graph.apply(down(**{"moddy-bot": "down", "moddy-api": "down"}))
+
+    assert effective["moddy-dashboard"] == "down"
+    assert impacted_by["moddy-dashboard"] == ["moddy-bot", "moddy-api"]
 
 
 def test_two_sources_are_both_credited(graph):
@@ -130,10 +168,34 @@ def test_a_monitored_service_without_data_stays_unknown(graph):
 # Configuration
 # ----------------------------------------------------------------------
 def test_parse_rules():
-    assert parse_rules("a>b,c;d>*") == {"a": ["b", "c"], "d": ["*"]}
-    assert parse_rules("  a > b ; ") == {"a": ["b"]}
+    assert parse_rules("a>b,c;d>*") == {
+        "a": {"b": "degraded", "c": "degraded"},
+        "d": {"*": "degraded"},
+    }
+    assert parse_rules("  a > b ; ") == {"a": {"b": "degraded"}}
     assert parse_rules("") == {}
     assert parse_rules("garbage") == {}
+
+
+def test_a_target_can_declare_its_severity():
+    assert parse_rules("a>b=down,c") == {"a": {"b": "down", "c": "degraded"}}
+
+
+def test_an_unreadable_severity_falls_back_to_degraded():
+    """Une faute de frappe dégrade la règle, elle n'empêche pas le démarrage."""
+    assert parse_rules("a>b=downn") == {"a": {"b": "degraded"}}
+
+
+def test_a_named_target_wins_over_the_wildcard(prod_settings):
+    graph = ImpactGraph(
+        "moddy-bot>*,moddy-dashboard=down",
+        prod_settings.known_services,
+        monitored=prod_settings.services,
+    )
+    effective, _ = graph.apply(down(**{"moddy-bot": "down"}))
+
+    assert effective["moddy-dashboard"] == "down"
+    assert effective["moddy-website"] == "degraded"
 
 
 def test_known_services_spans_heartbeats_and_resources(prod_settings):

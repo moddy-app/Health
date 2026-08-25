@@ -121,12 +121,15 @@ Un service qui tombe n'affecte pas que lui-même (`HM_IMPACT_MAP`) :
 | Ce qui tombe | Conséquence |
 |---|---|
 | **Bot** | Tous les autres services passent `degraded` — le bot *est* le produit |
-| **API / backend** | Website, Dashboard et Bot passent `degraded` |
+| **API / backend** | Dashboard passe **`down`**, Website et Bot passent `degraded` |
 | **Dashboard** | Aucun impact |
 | **AltGuard, Feeds** | Aucun impact sur les trois gros |
 
-Seul un service `down` propage, et la propagation ne produit que du `degraded` :
-pas de cascade possible. `/v1/status` expose les deux lectures — `status` (vécu
+Seul un service `down` propage, la propagation lit les états observés et jamais
+son propre résultat : pas de cascade possible. Elle produit du `degraded`, ou du
+`down` sur une cible suffixée `=down` — sans son backend, le dashboard n'affiche
+plus rien. Un `down` observé n'est jamais écrasé : l'état qu'un service constate
+sur lui-même prime. `/v1/status` expose les deux lectures — `status` (vécu
 utilisateur, propagation comprise) et `reported` (ce que le service dit de
 lui-même), avec `impacted_by` pour expliquer l'écart. Détail dans
 [`docs/detection.md`](docs/detection.md#propagation-dimpact).
@@ -174,7 +177,7 @@ app/
 ├── state.py                # Store Redis + fallback mémoire
 ├── util.py
 ├── api/                    # ingest, webhooks, public, health
-├── core/                   # detector, impact, incident, notifier, scheduler
+├── core/                   # detector, impact, incident, notifier, probe, scheduler
 ├── integrations/           # betterstack, discord_webhook, redis_bus
 └── render/                 # components (Components V2), colors
 ```

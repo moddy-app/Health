@@ -36,7 +36,7 @@ DETAILS_REFRESH_ID = "hm:details:refresh"
 
 # Le panneau se remplit service par service, chacun après son propre délai.
 REVEAL_MIN = 0.0
-REVEAL_MAX = 2.0
+REVEAL_MAX = 1.2
 
 
 async def load_status(ctx) -> tuple[StatusPresentation, dict[str, dict]]:

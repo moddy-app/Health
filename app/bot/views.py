@@ -63,7 +63,7 @@ async def _claim_cooldown(interaction: discord.Interaction, ctx) -> bool:
     await interaction.response.send_message(
         view=build_notice_view(
             f"{colors.EMOJI_ALERT} Slow down — once every {ctx.settings.hm_refresh_cooldown}s.",
-            colors.ACCENT_DEGRADED,
+            accent=colors.ACCENT_DEGRADED,
         ),
         ephemeral=True,
     )
@@ -85,7 +85,9 @@ class DetailsButton(ui.Button):
         ctx = getattr(interaction.client, "ctx", None)
         if ctx is None:  # pragma: no cover - le bot est toujours câblé
             await interaction.response.send_message(
-                view=build_notice_view(f"{colors.EMOJI_ALERT} Monitor not ready.", colors.ACCENT_MAJOR),
+                view=build_notice_view(
+                    f"{colors.EMOJI_ALERT} Monitor not ready.", accent=colors.ACCENT_MAJOR
+                ),
                 ephemeral=True,
             )
             return

@@ -17,7 +17,7 @@ JSON public au dashboard.
 ```bash
 python -m app.main                            # lancer (API + bot ; REDIS_URL vide = mémoire seule)
 uvicorn app.main:app --reload --port 8080     # API seule, sans bot
-pytest                                        # 151 tests, ~3s
+pytest                                        # 166 tests, ~3s
 python -m pyflakes app examples tests         # lint
 ```
 
@@ -31,6 +31,7 @@ app/
 ├── context.py     Câblage — un objet Context porte tout, posé sur app.state.ctx
 ├── config.py      Settings pydantic ; les listes sont du CSV, pas du JSON
 ├── keys.py        Noms des clés Redis — jamais de nom en dur ailleurs
+├── logs.py        Formatteur Railway (JSON une ligne, niveaux `warn`/`error`)
 ├── state.py       Store Redis + miroir mémoire ; ne lève jamais
 ├── api/           ingest, webhooks, public, health
 ├── core/          detector, impact, incident, notifier, probe, scheduler
@@ -105,6 +106,9 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
 - **Un incident non-`auto` ne voit jamais son niveau réécrit.** Comparer le
   niveau *observé* au sien rouvre la garde de sortie de `reconcile` à chaque
   cycle : un update toutes les 15 secondes.
+- **Railway n'accepte que quatre niveaux de log** — `debug`, `info`, `warn`,
+  `error`. `WARNING` et `CRITICAL` doivent être traduits, sinon tout ressort en
+  `info` et les avertissements se noient. Voir `app/logs.py`.
 - **Une sonde en échec écrit un heartbeat `down`**, elle ne se contente pas de ne
   rien écrire : sinon la détection attend l'expiration du TTL.
 

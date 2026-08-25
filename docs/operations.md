@@ -36,6 +36,40 @@ Les permissions Discord nécessaires dans le salon de statut : `View Channel`,
 `Send Messages`, `Embed Links`, `Manage Messages` (supprimer l'ancien sticky) et
 `Read Message History` (le retrouver après un redéploiement).
 
+## Logs
+
+Railway lit les logs émis en **JSON sur une seule ligne** et en tire deux
+champs : `message`, affiché dans l'explorateur, et `level`, qui colore la ligne
+et sert au filtrage (`@level:error`).
+
+Railway n'accepte que quatre niveaux, là où Python en a cinq et les nomme
+autrement :
+
+| Python | Railway |
+|---|---|
+| `DEBUG` | `debug` |
+| `INFO` | `info` |
+| `WARNING` | **`warn`** |
+| `ERROR` | `error` |
+| `CRITICAL` | `error` (Railway n'a rien au-dessus) |
+
+Sans cette traduction, tout ressort en `info` : un `WARNING` de perte de Redis
+se noie dans le flux, et c'est précisément la ligne qu'on cherche pendant une
+panne.
+
+`HM_LOG_FORMAT` vaut `auto` par défaut : JSON dès que `RAILWAY_ENVIRONMENT` ou
+`RAILWAY_SERVICE_ID` est présent, texte lisible sinon. `json` et `text` forcent
+l'un ou l'autre.
+
+Deux détails qui comptent :
+
+- **Une trace reste attachée à son message.** C'est tout l'intérêt du format
+  structuré : en texte brut, Railway découpe une trace en une ligne de log par
+  ligne de trace.
+- **Un `extra=` remonte tel quel** et devient filtrable. Le `color_message`
+  d'uvicorn, lui, est écarté : c'est la variante ANSI du message, illisible
+  dans l'explorateur.
+
 ### À corriger sur la status page
 
 Constats relevés sur `index.json`, toujours valables au dernier poll :

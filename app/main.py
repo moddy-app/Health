@@ -9,19 +9,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import __version__, keys
+from . import __version__, keys, logs
 from .api import health, ingest, public, webhooks
 from .config import get_settings
 from .context import build_context, shutdown, startup
 
 log = logging.getLogger("hm")
-
-
-def _configure_logging(level: str) -> None:
-    logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
-    )
 
 
 @asynccontextmanager
@@ -39,7 +32,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    _configure_logging(settings.hm_log_level)
+    logs.configure(settings.hm_log_level, settings.hm_log_format)
 
     app = FastAPI(
         title="Moddy Health Monitor",

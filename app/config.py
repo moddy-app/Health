@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     port: int = 8080
     hm_ingest_token: str = ""
     hm_log_level: str = "INFO"
+    # `auto` : JSON structuré sur Railway (qui en tire le niveau et colore la
+    # ligne), texte lisible en local. `json` ou `text` pour forcer.
+    hm_log_format: str = "auto"
 
     # --- Services surveillés ---
     hm_services: str = "moddy-bot,moddy-api,moddy-altguard,moddy-feeds"

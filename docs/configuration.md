@@ -32,6 +32,7 @@ aucune alerte ne peut partir : tout finit dans la file de rattrapage.
 | `PORT` | `8080` | Port d'écoute (injecté par Railway) |
 | `HM_INGEST_TOKEN` | — | Secret partagé avec les services. Vide ⇒ ingestion refusée |
 | `HM_LOG_LEVEL` | `INFO` | Niveau de log racine |
+| `HM_LOG_FORMAT` | `auto` | `json` (niveaux Railway), `text`, ou `auto` — JSON dès qu'une variable `RAILWAY_*` est présente |
 
 ## Services surveillés
 

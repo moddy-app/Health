@@ -452,6 +452,48 @@ class IncidentManager:
             on_foreign_incident=self._adopt,
         )
 
+    async def sync_updates(self) -> dict | None:
+        """Recharge les updates de l'incident actif depuis Better Stack.
+
+        Une update *éditée* là-bas (texte corrigé sur un update déjà posté) ne
+        déclenche jamais le webhook — l'anti-boucle ne marque que les ID
+        *nouveaux* (`hm:bs:seen_updates`) — donc une correction n'atteignait
+        jamais le message Discord. Cette commande resynchronise l'historique
+        affiché sur celui de Better Stack, à la main, plutôt que d'attendre
+        une update qui ne viendra pas.
+        """
+        incident = await self.get_active()
+        report_id = incident.get("bs_report_id") if incident else None
+        if not report_id:
+            return None
+
+        snapshot = await self._bs.poll_index()
+        if snapshot is None:
+            return None
+        report = next(
+            (r for r in snapshot.reports if str(r.get("id")) == str(report_id)), None
+        )
+        updates = sorted(
+            (report.get("updates") or []) if report else [],
+            key=lambda u: u.get("published_at") or "",
+        )
+        if not updates:
+            return None
+
+        incident["updates"] = [
+            {
+                "kind": "created" if index == 0 else "updated",
+                "at": update.get("published_at"),
+                "message": update.get("message") or "",
+                "author": "Better Stack",
+            }
+            for index, update in enumerate(updates)
+        ]
+        await self._save(incident)
+        if not await self._notifier.re_render(incident):
+            log.warning("resync %s : réédition du message Discord impossible", incident.get("id"))
+        return incident
+
     async def reconcile_betterstack(self) -> None:
         """Filet de sécurité : rattrape ce qu'un webhook manqué aurait perdu."""
         snapshot = await self._bs.poll_index()

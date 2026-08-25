@@ -202,6 +202,22 @@ Un update relayé vers Discord n'est **jamais** republié vers Better Stack
 Un incident **adopté** ne l'est pas davantage : il vient de là-bas, son message
 d'ouverture y est déjà.
 
+## Une update éditée ne repasse jamais par le webhook
+
+L'anti-boucle ne marque que les **ID** vus (`hm:bs:seen_updates`) : un ID déjà
+connu est ignoré, `owned` ou pas. Éditer le *texte* d'une update déjà postée
+sur Better Stack ne change pas son ID — le webhook ne livre donc jamais cette
+correction, et le message Discord reste figé sur l'ancien texte, silencieusement.
+
+`/status reload` (`IncidentManager.sync_updates`) répare ça à la main :
+relit `index.json` via `poll_index()`, retrouve le report de l'incident actif
+par `bs_report_id`, et **remplace** entièrement `incident["updates"]` par ce
+que dit Better Stack — la première update devient `created`, les suivantes
+`updated`. La réédition Discord passe par `Notifier.re_render()`, pas par
+`dispatch()` : l'anti-doublon (`_dedup_key`) ne compte que le *nombre*
+d'updates, pas leur contenu — après une correction sans changement de compte,
+`dispatch()` prendrait le message pour déjà à jour et n'éditerait rien.
+
 ## Services affectés d'un incident adopté
 
 Un incident ouvert à la main sur la status page ne connaît que des ressources

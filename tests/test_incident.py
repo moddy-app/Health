@@ -18,6 +18,7 @@ class StubNotifier:
 
     def __init__(self) -> None:
         self.dispatched: list[dict] = []
+        self.re_rendered: list[dict] = []
         self.resets: list[str] = []
         self.allowed = True
 
@@ -26,6 +27,10 @@ class StubNotifier:
         incident.setdefault("discord_message_id", "1409")
         incident.setdefault("discord_transport", "bot")
         return incident
+
+    async def re_render(self, incident):
+        self.re_rendered.append(dict(incident))
+        return True
 
     async def allow(self, service, status):
         return self.allowed
@@ -446,3 +451,60 @@ def test_the_incident_url_has_no_locale_segment(manager):
     """La status page en tire sa propre langue : pas de `/en/` en dur."""
     url = manager._url_for("995593")
     assert url == "https://status.moddy.app/incident/995593"
+
+
+async def test_sync_updates_reloads_a_correction_made_on_better_stack(polling, notifier):
+    """Le bug signalé : éditer une update sur Better Stack ne repasse jamais
+    par le webhook — seul un ID *nouveau* déclenche l'anti-boucle."""
+    manager = polling(
+        [
+            {
+                "id": "995593",
+                "title": "Billing issue",
+                "report_type": "manual",
+                "updated_at": iso(),
+                "updates": [
+                    {"id": "u1", "message": "Investigating.", "published_at": "2026-08-24T19:42:00Z"},
+                    {
+                        "id": "u2",
+                        "message": "Fix deployed (corrected wording).",
+                        "published_at": "2026-08-24T19:55:00Z",
+                    },
+                ],
+            }
+        ]
+    )
+    await manager.open(
+        title="Billing issue",
+        message="Investigating.",
+        level=colors.PARTIAL_OUTAGE,
+        affected=["moddy-api"],
+        origin="discord",
+        bs_report_id="995593",
+    )
+
+    incident = await manager.sync_updates()
+
+    assert incident is not None
+    assert [u["message"] for u in incident["updates"]] == [
+        "Investigating.",
+        "Fix deployed (corrected wording).",
+    ]
+    assert incident["updates"][0]["kind"] == "created"
+    assert incident["updates"][1]["kind"] == "updated"
+    assert notifier.re_rendered  # le message a bien été réédité, hors anti-doublon
+
+
+async def test_sync_updates_without_a_report_does_nothing(polling, notifier):
+    manager = polling([])
+    await manager.open(
+        title="A", message="m", level=colors.PARTIAL_OUTAGE, affected=["moddy-api"], origin="discord"
+    )
+    assert await manager.sync_updates() is None
+    assert notifier.re_rendered == []
+
+
+async def test_sync_updates_without_an_active_incident_does_nothing(polling, notifier):
+    manager = polling([])
+    assert await manager.sync_updates() is None
+    assert notifier.re_rendered == []

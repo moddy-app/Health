@@ -164,6 +164,11 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
 - **L'ID d'un report va dans `hm:bs:owned` avant tout autre traitement**, sinon
   la course avec le webhook entrant est perdue et le monitor adopte ses propres
   écritures.
+- **Éditer le texte d'une update Better Stack ne change pas son ID** : l'anti-
+  boucle ne marque que les ID vus, donc la correction ne repasse jamais par le
+  webhook. `/status reload` resynchronise à la main, et réédite Discord par
+  `Notifier.re_render()` — `dispatch()` ne verrait rien de nouveau, l'anti-
+  doublon ne comptant que le nombre d'updates, pas leur contenu.
 - **Le rate-limit se remet à zéro à la reprise d'un service**, sinon toute
   résolution ouvre un angle mort de 5 minutes.
 - **`index.json` porte tout l'historique.** Au premier poll, `hm:bs:seen_updates`

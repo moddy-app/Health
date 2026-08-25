@@ -104,9 +104,10 @@ def status_summary(s: StatusPresentation) -> str:
     return "\n".join(lines)
 
 
-# Un espace de largeur nulle : une ligne vide qui existe quand même. Discord
-# avale une ligne réellement vide, et le bloc rétrécirait en attendant.
-BLANK = "\u200b"
+# Une marque gauche-à-droite : un caractère invisible qui compte quand même.
+# Discord avale une ligne réellement vide — et un `-#` sans rien derrière n'est
+# pas rendu du tout — donc le bloc rétrécirait en attendant.
+BLANK = "\u200e"
 
 
 def _blanked(lines: list[str], head: str) -> str:

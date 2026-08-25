@@ -371,8 +371,8 @@ icônes remplacées par le spinner et les faits laissés blancs :
 Chaque bloc garde **exactement** le nombre de lignes qu'il aura une fois
 rempli : le message mesure la même chose en chargement qu'à l'arrivée, sinon il
 grandit sous le curseur à chaque révélation et ce qu'on lisait a bougé de
-place. Le blanc est un espace de largeur nulle — Discord avale une ligne
-réellement vide.
+place. Le blanc est une marque gauche-à-droite (`U+200E`) — Discord avale une
+ligne réellement vide, et un `-#` sans rien derrière n'est pas rendu du tout.
 
 Chaque service se révèle après son propre délai (0,3 à 1 s), donc l'ordre
 d'arrivée change à chaque fois. L'en-tête et le

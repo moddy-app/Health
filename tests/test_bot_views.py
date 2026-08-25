@@ -445,3 +445,20 @@ async def test_cancel_requires_an_active_maintenance():
 
 async def _async_return(value):
     return value
+
+
+async def test_the_cooldown_rejection_actually_renders(bot_ctx):
+    """Régression : `build_notice_view` n'accepte `accent` qu'en mot-clé —
+    l'appeler en positionnel ne se voit qu'au clic, jamais à l'import."""
+    from app import keys
+    from app.bot.views import DetailRefreshButton, DetailsButton
+
+    await bot_ctx.store.claim(keys.REFRESH_COOLDOWN.format(user=1), 60)
+    interaction = FakeInteraction(user_id=1, ctx=bot_ctx)
+
+    await DetailsButton().callback(interaction)
+    assert "Slow down" in flatten(interaction.sent.to_components())
+
+    interaction = FakeInteraction(user_id=1, ctx=bot_ctx)
+    await DetailRefreshButton().callback(interaction)
+    assert "Slow down" in flatten(interaction.sent.to_components())

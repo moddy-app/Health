@@ -240,6 +240,13 @@ Trois déclencheurs le font bouger, et ils peuvent tomber ensemble :
 | Changement du niveau global (boucle `check`) | Édition immédiate |
 | `/status sticky` | Repost forcé |
 
+- **Le sticky ne se repost jamais sur lui-même.** `channel.send()` n'a pas
+  encore rendu l'ID que la gateway a déjà livré le `MESSAGE_CREATE`
+  correspondant : le sticky ne se reconnaissait pas, se croyait poussé par un
+  tiers et repostait — ce qui produisait le message déclenchant le suivant. Dix
+  stickys empilés dans le salon, constaté en production. Deux gardes : un
+  historique court des IDs qu'on vient de poster, et surtout une vérification
+  qu'il n'est pas *déjà* le dernier message du salon avant tout repost.
 - **Debounce.** Sans lui, une rafale de dix messages produit dix reposts et un
   rate limit Discord immédiat.
 - **Verrou asyncio.** Les trois déclencheurs peuvent arriver en même temps ;

@@ -89,20 +89,40 @@ Le rate-limit porte sur les **causes racines** (`snapshot.failing`), pas sur les
 services dégradés par ricochet : sinon un seul incident consommerait la fenêtre
 de tous les services à la fois.
 
-### Trois gardes contre l'update en boucle
+### Un update par changement réel, jamais un de plus
 
-Constaté en production : un incident adopté depuis Better Stack prenait un
-update toutes les 15 secondes, sur Discord *et* sur la status page.
+**La règle :** un incident ouvert ne reçoit un update que si l'état observé a
+bougé — un service qui tombe, un service qui revient, une sévérité qui change.
+Tant qu'il ne bouge pas, il n'y a rien de neuf à dire.
 
-1. **La garde de sortie compare le niveau qui sera réellement écrit**, pas le
-   niveau observé. Le niveau d'un incident non-`auto` n'étant jamais réécrit,
-   comparer l'observé au sien rouvrait la garde à chaque cycle.
-2. **Le rate-limit couvre tout update automatique**, plus seulement ceux qui
-   apportent un service de plus. C'est le seul garde-fou quand la
-   réconciliation se déclenche en boucle.
-3. **Un update automatique identique au précédent n'est pas publié** — même
-   texte, même niveau, mêmes services. Un membre du staff, lui, a le droit de
-   répéter : la garde ne s'applique qu'au chemin automatique (`dedupe=True`).
+Elle est portée par une **signature de l'état**, stockée dans l'incident sous
+`state_fingerprint` :
+
+```
+major_outage|moddy-api=down,moddy-bot=down,moddy-dashboard=down,...
+```
+
+`reconcile` la recalcule à chaque cycle et sort immédiatement si elle est
+inchangée. Le fingerprint est réécrit **seulement** quand l'update part
+réellement : un update bloqué ne doit pas faire oublier le changement.
+
+Constaté en production sans elle : un incident adopté depuis Better Stack
+prenait un update toutes les 15 secondes, sur Discord *et* sur la status page.
+Deux comparaisons plus faibles avaient été essayées d'abord, et aucune ne
+suffit :
+
+- **Comparer le niveau** ne marche pas : celui d'un incident non-`auto` n'est
+  jamais réécrit, donc l'observé en diffère en permanence et la garde ne se
+  referme jamais.
+- **Comparer `affected`** ne marche pas non plus : la liste ne distingue pas un
+  service `degraded` d'un service `down`, et rate donc une aggravation.
+
+Le rate-limit, lui, ne garde plus que l'**ouverture** d'un incident. L'étendre
+aux updates suffisait à faire disparaître une reprise de service pendant cinq
+minutes — l'inverse du but recherché.
+
+En filet de sécurité, un update automatique identique au précédent n'est pas
+publié (`dedupe=True`). Un membre du staff, lui, a le droit de répéter.
 
 ### Textes générés
 

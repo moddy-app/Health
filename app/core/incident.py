@@ -147,6 +147,7 @@ class IncidentManager:
         ends_at: str | None = None,
         bs_report_id: str | None = None,
         url: str | None = None,
+        fingerprint: str | None = None,
     ) -> dict:
         now = iso()
         incident: dict = {
@@ -167,6 +168,7 @@ class IncidentManager:
             "resolved_at": None,
             "url": url or self._url_for(bs_report_id),
             "updates": [{"kind": "created", "at": now, "message": message, "author": author}],
+            "state_fingerprint": fingerprint,
         }
         if starts_at:
             incident["starts_at"] = starts_at
@@ -193,6 +195,7 @@ class IncidentManager:
         statuses: dict[str, str] | None = None,
         publish_betterstack: bool = True,
         dedupe: bool = False,
+        fingerprint: str | None = None,
     ) -> dict | None:
         incident = await self.get_active()
         if incident is None:
@@ -216,6 +219,8 @@ class IncidentManager:
             incident["affected"] = list(affected)
 
         incident["status"] = "updating"
+        if fingerprint is not None:
+            incident["state_fingerprint"] = fingerprint
         incident["updates"].append(
             {"kind": kind, "at": iso(), "message": message, "author": author}
         )
@@ -289,6 +294,10 @@ class IncidentManager:
                 await self.resolve(message="All systems are operational again.")
             return
 
+        # La signature de l'état observé décide de tout : un update ne part que
+        # si elle a bougé.
+        fingerprint = _fingerprint(level, snapshot.effective)
+
         if active is None:
             if not await self._allow_any(root, statuses):
                 return
@@ -300,28 +309,23 @@ class IncidentManager:
                 origin="auto",
                 notify=level == colors.MAJOR_OUTAGE,
                 statuses=statuses,
+                fingerprint=fingerprint,
             )
             return
 
         # Incident déjà ouvert : on l'enrichit plutôt que d'en créer un second,
         # y compris s'il a été ouvert à la main ou depuis Better Stack.
-        known = set(active.get("affected") or [])
-        changed = set(affected) - known
-        recovered = known - set(affected)
-        # Le niveau d'un incident ouvert ailleurs qu'ici n'est jamais réécrit :
-        # comparer le niveau *observé* au sien rouvrait la garde à chaque cycle,
-        # et l'incident prenait un update toutes les 15 secondes.
+        #
+        # Un seul update par changement réel — un service qui tombe, un service
+        # qui revient, une sévérité qui bouge. Tant que l'état observé est le
+        # même, il n'y a rien de neuf à publier : comparer `affected` et le
+        # niveau ne suffisait pas, parce que le niveau d'un incident ouvert
+        # ailleurs n'est jamais réécrit et que `affected` ne distingue pas un
+        # service `degraded` d'un service `down`.
+        if active.get("state_fingerprint") == fingerprint:
+            return
+
         target_level = level if active.get("origin") == "auto" else active.get("level")
-        if not changed and not recovered and target_level == active.get("level"):
-            return
-
-        # Le rate-limit vaut pour *tout* update automatique, pas seulement pour
-        # ceux qui apportent un service de plus : c'est le seul garde-fou quand
-        # la réconciliation se déclenche en boucle.
-        newly_failing = [s for s in root if s in changed]
-        if not await self._allow_any(newly_failing or sorted(changed) or root, statuses):
-            return
-
         await self.add_update(
             message=_auto_message(level, root, snapshot.collateral, self._s),
             level=target_level,
@@ -329,6 +333,7 @@ class IncidentManager:
             notify=False,
             statuses=statuses,
             dedupe=True,
+            fingerprint=fingerprint,
         )
 
     async def _allow_any(self, services: list[str], statuses: dict[str, str]) -> bool:
@@ -592,6 +597,18 @@ def _auto_message(
 async def _ignore(report: dict, update: dict) -> None:
     """Marquer vu sans rien faire — voir `reconcile_betterstack`."""
     return None
+
+
+def _fingerprint(level: str, effective: dict[str, str]) -> str:
+    """Signature de l'état observé : le niveau global, et l'état de chaque service.
+
+    Un update d'incident ne se justifie que si cette signature bouge — un
+    service qui tombe, un service qui revient, une sévérité qui change. Tant
+    qu'elle est stable, il n'y a rien de neuf à dire, et le redire toutes les
+    15 secondes noie l'incident sous ses propres updates.
+    """
+    services = ",".join(f"{name}={status}" for name, status in sorted(effective.items()))
+    return f"{level}|{services}"
 
 
 def _is_noop_update(

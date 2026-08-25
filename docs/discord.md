@@ -261,7 +261,17 @@ Trois déclencheurs le font bouger, et ils peuvent tomber ensemble :
   autres.
 - **Un sticky se reconnaît à son bouton.** `custom_id: hm:sticky:refresh`, plus
   l'auteur du message. C'est ce qui le distingue des messages d'incident, que le
-  bot poste dans le même salon et qu'il ne faut surtout pas supprimer.
+  bot poste dans le même salon et qu'il ne faut surtout pas supprimer : ceux-ci
+  ne portent aucun `custom_id` — leur seul bouton est un lien. Un test le
+  verrouille sur le vrai rendu : ajouter un composant interactif au message
+  d'incident le fera tomber.
+- **Jamais un sticky de plus si l'ancien a résisté.** Sans la permission
+  `Manage Messages`, la suppression échoue : poster quand même laisserait un
+  sticky mort à chaque repost, et le salon se remplirait en silence — l'échec
+  était journalisé en `debug`, invisible en production. Il est désormais en
+  `warn` et nomme la permission manquante, et le sticky est **édité sur place**
+  plutôt que reposté. Un sticky qui n'est pas tout en bas vaut mieux qu'un salon
+  saturé.
 
 ## Bouton Refresh
 

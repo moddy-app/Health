@@ -17,7 +17,7 @@ JSON public au dashboard.
 ```bash
 python -m app.main                            # lancer (API + bot ; REDIS_URL vide = mémoire seule)
 uvicorn app.main:app --reload --port 8080     # API seule, sans bot
-pytest                                        # 176 tests, ~4s
+pytest                                        # 180 tests, ~4s
 python -m pyflakes app examples tests         # lint
 ```
 
@@ -88,6 +88,9 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
 - **Le sticky sans debounce prend un rate limit**, sans verrou fait des
   doublons, et sans mémoire de ses propres IDs se repost sur lui-même en boucle
   — la gateway livre le `MESSAGE_CREATE` avant que `send()` n'ait rendu l'ID.
+- **Sans `Manage Messages`, le sticky ne peut rien effacer.** Poster quand même
+  remplit le salon ; l'échec doit être en `warn`, pas en `debug`, et le repost
+  doit retomber sur une édition.
 - **L'identité du sticky ne peut pas dépendre de Redis.** Sans lui, l'ID est
   perdu à chaque redéploiement et le salon accumule un orphelin par déploiement.
   Il se retrouve dans le salon, à son `custom_id`.

@@ -16,6 +16,7 @@ from ..config import Settings
 from ..render import colors, theme
 from ..render.layout import build_notice_view
 from ..util import iso, parse_iso
+from . import severity
 
 log = logging.getLogger("hm.bot.modals")
 
@@ -116,12 +117,19 @@ class _StaffModal(ui.Modal):
     def build_payload(self, interaction: discord.Interaction) -> dict | None:
         raise NotImplementedError
 
+    async def intercept(self, interaction: discord.Interaction, payload: dict) -> bool:
+        """Une étape avant publication. True = le modal a déjà répondu."""
+        return False
+
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        payload = self.build_payload(interaction)
+        if payload is not None and await self.intercept(interaction, payload):
+            return
+
         # Obligatoire : créer un incident appelle Better Stack *et* publie sur
         # Discord, ce qui dépasse facilement la fenêtre de 3s d'une interaction.
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        payload = self.build_payload(interaction)
         if payload is None:
             await interaction.followup.send(
                 view=build_notice_view(
@@ -194,11 +202,25 @@ class IncidentCreateModal(_StaffModal, title="Create Incident"):
         return {
             "title": self.incident_title.component.value,
             "message": self.message.component.value,
-            "level": (self.level.component.values or [colors.PARTIAL_OUTAGE])[0],
+            # `RadioGroup` est un choix unique : il rend `value`, pas `values`.
+            "level": self.level.component.value or colors.PARTIAL_OUTAGE,
             "affected": list(self.affected.component.values),
             "notify": bool(self.notify.component.values),
             "author": interaction.user.display_name,
         }
+
+    async def intercept(self, interaction: discord.Interaction, payload: dict) -> bool:
+        """Le modal ne publie pas : il demande d'abord l'état de chaque service.
+
+        Un modal ne peut pas en ouvrir un second — Discord ne l'autorise qu'en
+        réponse à une commande ou à un composant. Le brouillon part donc dans le
+        store et la suite se joue dans un panneau éphémère.
+        """
+        await severity.save_draft(self._ctx, interaction.user.id, payload)
+        await interaction.response.send_message(
+            view=severity.SeverityView(payload, self._ctx.settings), ephemeral=True
+        )
+        return True
 
 
 class IncidentUpdateModal(_StaffModal, title="Post an Update"):

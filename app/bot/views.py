@@ -7,7 +7,9 @@ est mort après le premier redéploiement — et Railway redéploie souvent.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
 
 import discord
 from discord import ui
@@ -31,6 +33,10 @@ log = logging.getLogger("hm.bot.views")
 # tous les stickys d'avant le déploiement.
 DETAILS_ID = "hm:sticky:refresh"
 DETAILS_REFRESH_ID = "hm:details:refresh"
+
+# Le panneau se remplit service par service, chacun après son propre délai.
+REVEAL_MIN = 1.0
+REVEAL_MAX = 3.0
 
 
 async def load_status(ctx) -> tuple[StatusPresentation, dict[str, dict]]:
@@ -67,7 +73,12 @@ class DetailsButton(ui.Button):
     """Ouvre le panneau de diagnostic, en éphémère."""
 
     def __init__(self) -> None:
-        super().__init__(label="Details", style=discord.ButtonStyle.secondary, custom_id=DETAILS_ID)
+        super().__init__(
+            label="Details",
+            style=discord.ButtonStyle.primary,
+            emoji=discord.PartialEmoji.from_str(colors.EMOJI_INFO),
+            custom_id=DETAILS_ID,
+        )
 
     async def callback(self, interaction: discord.Interaction) -> None:
         ctx = getattr(interaction.client, "ctx", None)
@@ -81,8 +92,9 @@ class DetailsButton(ui.Button):
             return
         snapshot, heartbeats = await load_status(ctx)
         await interaction.response.send_message(
-            view=DetailView(snapshot, heartbeats), ephemeral=True
+            view=DetailView(snapshot, heartbeats, revealed=set()), ephemeral=True
         )
+        await reveal(interaction, snapshot, heartbeats)
 
 
 class DetailRefreshButton(ui.Button):
@@ -90,7 +102,10 @@ class DetailRefreshButton(ui.Button):
 
     def __init__(self) -> None:
         super().__init__(
-            label="Refresh", style=discord.ButtonStyle.secondary, custom_id=DETAILS_REFRESH_ID
+            label="Refresh",
+            style=discord.ButtonStyle.success,
+            emoji=discord.PartialEmoji.from_str(colors.EMOJI_REFRESH),
+            custom_id=DETAILS_REFRESH_ID,
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -101,7 +116,10 @@ class DetailRefreshButton(ui.Button):
         if not await _claim_cooldown(interaction, ctx):
             return
         snapshot, heartbeats = await load_status(ctx)
-        await interaction.response.edit_message(view=DetailView(snapshot, heartbeats))
+        await interaction.response.edit_message(
+            view=DetailView(snapshot, heartbeats, revealed=set())
+        )
+        await reveal(interaction, snapshot, heartbeats)
 
 
 class StickyStatusView(BaseView):
@@ -150,16 +168,42 @@ class DetailView(BaseView):
         self,
         snapshot: StatusPresentation | None = None,
         heartbeats: dict[str, dict] | None = None,
+        revealed: set[str] | None = None,
     ) -> None:
         super().__init__()
         heartbeats = heartbeats or {}
-        container = ui.Container(accent_color=snapshot.accent if snapshot else None)
+        # `revealed=None` : tout est déjà là. Un ensemble, même vide, veut dire
+        # que le panneau est en train de se remplir.
+        done = set() if snapshot is None else (
+            {service.id for service in snapshot.services} if revealed is None else revealed
+        )
+        complete = snapshot is not None and all(s.id in done for s in snapshot.services)
+        # Le liseré est une information comme une autre : il ne prend sa couleur
+        # qu'une fois tout révélé.
+        container = ui.Container(accent_color=snapshot.accent if complete else None)
         if snapshot is not None:
-            container.add_item(ui.TextDisplay(status_header(snapshot)))
+            container.add_item(ui.TextDisplay(status_header(snapshot, revealed=complete)))
             for service in snapshot.services:
-                container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+                # Un service pas encore révélé n'est séparé que par du vide : le
+                # panneau s'aère en attendant, et les traits n'arrivent qu'avec
+                # les faits qu'elles séparent.
+                shown = service.id in done
                 container.add_item(
-                    ui.TextDisplay(service_detail(service, heartbeats.get(service.id) or {}))
+                    ui.Separator(
+                        visible=shown,
+                        spacing=discord.SeparatorSpacing.small
+                        if shown
+                        else discord.SeparatorSpacing.large,
+                    )
+                )
+                container.add_item(
+                    ui.TextDisplay(
+                        service_detail(
+                            service,
+                            heartbeats.get(service.id) or {},
+                            revealed=service.id in done,
+                        )
+                    )
                 )
         else:
             container.add_item(ui.TextDisplay("### Status"))
@@ -172,6 +216,40 @@ class DetailView(BaseView):
 
 
 def build_detail_view(
-    snapshot: StatusPresentation, heartbeats: dict[str, dict]
+    snapshot: StatusPresentation,
+    heartbeats: dict[str, dict],
+    revealed: set[str] | None = None,
 ) -> BaseView:
-    return DetailView(snapshot, heartbeats)
+    return DetailView(snapshot, heartbeats, revealed)
+
+
+async def reveal(
+    interaction: discord.Interaction,
+    snapshot: StatusPresentation,
+    heartbeats: dict[str, dict],
+) -> None:
+    """Révèle les services un par un, entre 1 et 3 secondes chacun.
+
+    Le panneau part vide — un spinner par service — et se remplit ; la dernière
+    édition rend l'en-tête et le liseré. Chaque service a son propre délai, donc
+    l'ordre d'arrivée change à chaque ouverture.
+
+    Une édition qui échoue (éphémère fermé, token expiré) arrête la révélation
+    sans rien casser : l'utilisateur peut toujours rappuyer sur `Refresh`.
+    """
+    revealed: set[str] = set()
+    schedule = sorted(
+        (random.uniform(REVEAL_MIN, REVEAL_MAX), service.id) for service in snapshot.services
+    )
+    elapsed = 0.0
+    for at, service_id in schedule:
+        await asyncio.sleep(max(at - elapsed, 0))
+        elapsed = at
+        revealed.add(service_id)
+        try:
+            await interaction.edit_original_response(
+                view=DetailView(snapshot, heartbeats, revealed)
+            )
+        except Exception as exc:
+            log.info("révélation du panneau interrompue: %s", exc)
+            return

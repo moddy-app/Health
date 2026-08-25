@@ -14,6 +14,7 @@ from discord.ext import commands as ext_commands
 
 from ..config import Settings
 from .commands import StatusCommands, on_tree_error
+from .severity import SeverityView
 from .views import DetailView, StickyStatusView
 
 log = logging.getLogger("hm.bot")
@@ -47,6 +48,7 @@ class HealthBot(ext_commands.Bot):
         # celui qui l'a ouvert.
         self.add_view(StickyStatusView())
         self.add_view(DetailView())
+        self.add_view(SeverityView())
         self.tree.add_command(StatusCommands())
         self.tree.on_error = on_tree_error
 

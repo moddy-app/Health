@@ -66,6 +66,10 @@ EMOJI_ALERT = "<:exclamation:1541799657829568582>"
 # Chargement, et rien d'autre.
 EMOJI_LOADING = "<a:spinner:1541617132104843264>"
 
+# Icônes de boutons — elles n'apparaissent jamais dans du texte.
+EMOJI_INFO = "<:info:1541808220610363423>"
+EMOJI_REFRESH = "<:refresh:1541808218760544376>"
+
 # État d'un service ou d'un niveau agrégé -> icône.
 EMOJI_BY_LEVEL: dict[str, str] = {
     MAJOR_OUTAGE: EMOJI_DOWN,

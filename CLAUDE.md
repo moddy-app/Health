@@ -85,6 +85,9 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
 - **Le webhook ne peut pas éditer un message posté par le bot.** L'échec
   d'édition déclenche un repost, pas une perte. Réciproquement, tant que le
   webhook répond, le bot ne touche pas à un fil qui lui appartient.
+- **Un modal ne peut pas en ouvrir un second.** Discord ne l'autorise qu'en
+  réponse à une commande ou à un composant : la sévérité par service se demande
+  dans un panneau éphémère, pas dans un deuxième modal. Voir `bot/severity.py`.
 - **`send_modal` ne s'annule pas.** `/status update` et `/status resolve`
   vérifient l'incident actif *avant* d'ouvrir le modal.
 - **Une vue persistante sans `add_view` est morte au redéploiement**, et Railway
@@ -111,6 +114,9 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
   sticky se reconnaît dans le salon : le changer abandonne tous les stickys déjà
   postés. Le libellé, lui, est libre — il dit `Details` depuis qu'il ouvre le
   panneau de diagnostic, mais l'identifiant reste `hm:sticky:refresh`.
+- **Un `RadioGroup` rend `value`, un `CheckboxGroup` rend `values`.** Se
+  tromper de nom ne casse qu'au submit, après que le staff a tout tapé :
+  `tests/test_bot_views.py` lit les quatre modals pour cette raison.
 - **`max_values` d'un `CheckboxGroup` ne peut pas être une constante.** Discord
   exige au moins autant d'options que ce qu'on autorise à cocher et refuse le
   modal entier sinon (`options: Must be 10 or more in length`) : toutes les

@@ -349,6 +349,34 @@ rejoue le panneau sur place (vue persistante elle aussi).
 -# <:exclamation:...> redis · 1/2 passing
 ```
 
+Le bouton `Details` est bleu et porte `<:info:1541808220610363423>` ; le
+`Refresh` du panneau est vert et porte `<:refresh:1541808218760544376>`. Ce
+sont des icônes de bouton : elles n'apparaissent jamais dans du texte.
+
+**Le panneau se remplit sous les yeux.** À l'ouverture comme au refresh, tout
+part avec un spinner et aucun fait, les services séparés par du vide plutôt que
+par des traits :
+
+```
+### <a:spinner:...> Checking services
+
+<a:spinner:...> Moddy Bot
+
+<a:spinner:...> Dashboard
+
+<a:spinner:...> API
+```
+
+Chaque service se révèle après son propre délai (1 à 3 s), donc l'ordre
+d'arrivée change à chaque fois. L'en-tête et le
+liseré arrivent en dernier — annoncer « All Systems Operational » avant
+d'avoir montré le premier service reviendrait à donner la réponse avant la
+question. Une édition qui échoue (éphémère fermé, token expiré) arrête la
+révélation sans rien casser.
+
+**L'âge du heartbeat est un timestamp Discord** (`<t:...:R>`), pas un âge
+calculé : un panneau éphémère reste ouvert, et « 2s ago » vieillit à l'écran.
+
 **Les checks se résument, ils ne se dumpent pas.** Le panneau affichait
 `postgres: {'ok': True, 'latency_ms': 4} · redis: {...}` — illisible. En régime
 normal un compteur suffit ; en panne, seuls les checks en échec sont nommés.
@@ -364,6 +392,27 @@ point de panne pour rien.
 
 `HM_REFRESH_COOLDOWN` (5s par utilisateur) — sans ça, le bouton est un vecteur
 de spam sur un salon public.
+
+## Sévérité par service
+
+`/status incident` ne publie pas en sortant du modal. Le modal tient dans cinq
+composants top-level et les cinq sont pris (titre, message, sévérité globale,
+services affectés, notification) : impossible d'y demander en plus l'état de
+*chaque* service. Et un modal ne peut pas en ouvrir un second — Discord ne
+l'autorise qu'en réponse à une commande ou à un composant.
+
+Le brouillon part donc dans `hm:incident:draft:{user}` (TTL 15 min) et un
+panneau éphémère prend la suite : un select pour désigner les services
+franchement down, un bouton `Publish`. Les services non cochés sont publiés en
+`degraded`. Sans cette étape, tout service affecté partait en `downtime` sur la
+status page, y compris ceux qui ne faisaient que ralentir.
+
+- **L'état vit dans le store, pas dans la View.** C'est ce qui permet de la
+  réenregistrer vide au démarrage : les callbacks relisent le brouillon de
+  l'utilisateur qui clique, et un redéploiement au mauvais moment ne perd pas ce
+  que le staff vient d'écrire.
+- **Le brouillon est supprimé avant publication**, pas après : deux clics sur
+  `Publish` ne doivent pas ouvrir deux incidents.
 
 ## Commandes
 

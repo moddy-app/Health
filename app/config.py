@@ -135,7 +135,10 @@ class Settings(BaseSettings):
 
     # --- API publique ---
     hm_public_rate_limit: str = "60/minute"
-    hm_cors_origins: str = "https://moddy.app,https://dashboard.moddy.app"
+    # `https://moddy.app` (sans `www`) redirige en 307 vers `https://www.moddy.app` :
+    # c'est cette dernière origine que le navigateur envoie réellement, pas le domaine
+    # nu — sans elle, tout `fetch` depuis le site vitrine est bloqué par CORS.
+    hm_cors_origins: str = "https://moddy.app,https://www.moddy.app,https://dashboard.moddy.app"
     hm_public_cache_ttl: int = 30
 
     # ------------------------------------------------------------------

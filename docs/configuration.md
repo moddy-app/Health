@@ -164,7 +164,7 @@ ensemble et la redondance ne servirait à rien.
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `HM_PUBLIC_RATE_LIMIT` | `60/minute` | `N/unité`, unités `second`, `minute`, `hour`, `day` |
-| `HM_CORS_ORIGINS` | `https://moddy.app,https://dashboard.moddy.app` | Origines autorisées |
+| `HM_CORS_ORIGINS` | `https://moddy.app,https://www.moddy.app,https://dashboard.moddy.app` | Origines autorisées |
 | `HM_PUBLIC_CACHE_TTL` | `30` | TTL de `hm:status:public` et `max-age` du header |
 
 Une valeur `HM_PUBLIC_RATE_LIMIT` illisible retombe silencieusement sur

@@ -284,3 +284,12 @@ def test_betterstack_webhook_rejects_a_bad_key(client):
 def test_the_bot_no_longer_has_an_http_command_route(client):
     """Le bot vit dans ce process : il appelle `handle_command` directement."""
     assert client.post("/ingest/command", json={}, headers=TOKEN).status_code == 404
+
+
+def test_cors_allows_the_website_at_its_real_redirected_origin():
+    """`moddy.app` (sans `www`) répond 307 vers `www.moddy.app` : c'est cette
+    origine que le navigateur envoie réellement, sans quoi `fetch` depuis le
+    site vitrine est bloqué par CORS."""
+    from app.config import Settings
+
+    assert "https://www.moddy.app" in Settings(redis_url="").cors_origins

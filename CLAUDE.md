@@ -146,7 +146,10 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
   — et la sonde ne suit jamais les redirections (§`core/probe.py`), à raison :
   un site sondé sur son domaine nu partait `down` en boucle, un vrai faux
   positif constaté en production. L'URL de `HM_PROBE_MAP` doit répondre `2xx`
-  directement, jamais après un saut.
+  directement, jamais après un saut. Même piège côté navigateur : c'est
+  `https://www.moddy.app` que le fetch envoie comme origine, pas le domaine
+  nu — `HM_CORS_ORIGINS` doit lister les deux, sinon CORS bloque le site
+  vitrine.
 - **Les URL d'incident que le monitor construit n'ont pas de segment de
   langue.** `_url_for` génère `/incident/{id}`, pas `/en/incident/{id}` — la
   status page choisit elle-même sa langue à l'affichage.

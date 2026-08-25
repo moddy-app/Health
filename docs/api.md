@@ -201,7 +201,7 @@ page elle-même (`DISCORD_STATUS_PAGE_URL`) plutôt que de disparaître.
 Une maintenance ajoute sa fenêtre, tirée de `starts_at`/`ends_at` :
 
 ```
-**Some Moddy services** are undergoing scheduled maintenance, from 2026-08-25 02:00 to 04:00 UTC.
+**Some Moddy services** are undergoing scheduled maintenance, from 2026-08-25 02:00 to 04:00 UTC. [View status](...)
 ```
 
 La borne de fin ne répète la date que si elle change de jour (`04:00` seul, ou

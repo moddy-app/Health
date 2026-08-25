@@ -13,6 +13,7 @@ from .. import keys
 from ..config import Settings
 from ..context import Context, get_ctx
 from ..render import colors
+from ..util import parse_iso
 
 router = APIRouter(prefix="/v1", tags=["public"])
 
@@ -73,7 +74,9 @@ def _banner_message(current: dict, service: str | None, settings: Settings) -> s
     verb = "is" if tailored else "are"
 
     if current.get("type") == "maintenance":
-        text = f"**{subject}** {verb} undergoing scheduled maintenance."
+        text = f"**{subject}** {verb} undergoing scheduled maintenance"
+        window = _format_window(current.get("starts_at"), current.get("ends_at"))
+        text += f", {window}." if window else "."
     elif current.get("level") == colors.DEGRADED:
         text = f"**{subject}** {verb} experiencing degraded performance."
     else:
@@ -83,3 +86,16 @@ def _banner_message(current: dict, service: str | None, settings: Settings) -> s
     if url:
         text += f" [View status]({url})"
     return text
+
+
+def _format_window(starts_at: str | None, ends_at: str | None) -> str | None:
+    """« from 2026-08-25 02:00 to 04:00 UTC » — le même jour n'est pas répété.
+
+    `None` si l'une des deux bornes manque : mieux vaut ne rien dire qu'une
+    fenêtre à moitié écrite.
+    """
+    start, end = parse_iso(starts_at), parse_iso(ends_at)
+    if start is None or end is None:
+        return None
+    end_fmt = end.strftime("%H:%M") if start.date() == end.date() else end.strftime("%Y-%m-%d %H:%M")
+    return f"from {start.strftime('%Y-%m-%d %H:%M')} to {end_fmt} UTC"

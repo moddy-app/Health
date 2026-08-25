@@ -196,6 +196,16 @@ un service qui n'est pas concerné n'a pas à apprendre lequel l'est. Un
 `service` absent, inconnu, ou non affecté retombe toujours sur le générique —
 jamais d'erreur.
 
+Une maintenance ajoute sa fenêtre, tirée de `starts_at`/`ends_at` :
+
+```
+**Some Moddy services** are undergoing scheduled maintenance, from 2026-08-25 02:00 to 04:00 UTC.
+```
+
+La borne de fin ne répète la date que si elle change de jour (`04:00` seul, ou
+`2026-08-26 01:00` si la fenêtre chevauche minuit). Sans les deux bornes,
+aucune fenêtre n'est mentionnée — une moitié de fenêtre serait pire que rien.
+
 ---
 
 ## `GET /health`

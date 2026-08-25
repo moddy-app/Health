@@ -353,22 +353,25 @@ Le bouton `Details` est bleu et porte `<:info:1541808220610363423>` ; le
 `Refresh` du panneau est vert et porte `<:refresh:1541808218760544376>`. Ce
 sont des icônes de bouton : elles n'apparaissent jamais dans du texte.
 
-**Le panneau se remplit sous les yeux.** À l'ouverture comme au refresh, tout
-part avec un spinner et aucun fait, les services séparés par du vide plutôt que
-par des traits :
+**Le panneau se remplit sous les yeux.** À l'ouverture comme au refresh, il
+part avec sa structure définitive — mêmes lignes, mêmes séparateurs — mais les
+icônes remplacées par le spinner et les faits laissés blancs :
 
 ```
-### <a:spinner:...> Checking services
-
-<a:spinner:...> Moddy Bot
-
-<a:spinner:...> Dashboard
-
-<a:spinner:...> API
+### <a:spinner:...> ​
+-# ​
+──────────────────────────
+<a:spinner:...> **Moddy Bot** · ​
+-# ​
+──────────────────────────
+<a:spinner:...> **API** · ​
+-# ​
 ```
 
-Chaque service se révèle après son propre délai (1 à 3 s), donc l'ordre
-d'arrivée change à chaque fois. L'en-tête et le
+Chaque service se révèle après son propre délai (0,3 à 1 s), donc l'ordre
+d'arrivée change à chaque fois. Le blanc est un espace de largeur nulle :
+Discord avale une ligne réellement vide, et le panneau sauterait à chaque
+révélation au lieu de se remplir sur place. L'en-tête et le
 liseré arrivent en dernier — annoncer « All Systems Operational » avant
 d'avoir montré le premier service reviendrait à donner la réponse avant la
 question. Une édition qui échoue (éphémère fermé, token expiré) arrête la

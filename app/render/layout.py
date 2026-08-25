@@ -104,15 +104,21 @@ def status_summary(s: StatusPresentation) -> str:
     return "\n".join(lines)
 
 
+# Un espace insécable de largeur nulle : une ligne vide qui existe quand même.
+# Discord avale une ligne réellement vide, et le panneau sauterait à chaque
+# révélation au lieu de se remplir sur place.
+BLANK = "\u200b"
+
+
 def status_header(s: StatusPresentation, *, revealed: bool = True) -> str:
     """En-tête du panneau de détail : le niveau global et rien d'autre.
 
-    Tant que tous les services ne sont pas révélés, l'en-tête ne conclut rien :
-    annoncer « All Systems Operational » avant d'avoir affiché le premier
-    service serait donner la réponse avant la question.
+    Tant que tous les services ne sont pas révélés, l'en-tête garde sa forme
+    mais ne dit rien : annoncer « All Systems Operational » avant d'avoir
+    affiché le premier service serait donner la réponse avant la question.
     """
     if not revealed:
-        return f"### {theme.EMOJI_LOADING} Checking services"
+        return f"### {theme.EMOJI_LOADING} {BLANK}\n-# {BLANK}"
     lines = [f"### {s.emoji} {s.headline}", f"-# Last updated <t:{s.timestamp}:R>"]
     if s.incident_title:
         title = f"[{s.incident_title}]({s.incident_url})" if s.incident_url else s.incident_title
@@ -159,7 +165,10 @@ def service_detail(service, hb: dict, *, revealed: bool = True) -> str:
     ne montre que son nom : pas d'icône d'état, pas de fait à moitié lu.
     """
     if not revealed:
-        return f"{theme.EMOJI_LOADING} {service.name}"
+        # Même structure qu'une fois révélé — l'icône devient un spinner, les
+        # faits laissent leur place blanche. Le bloc ne bouge pas en se
+        # remplissant.
+        return f"{theme.EMOJI_LOADING} **{service.name}** · {BLANK}\n-# {BLANK}"
 
     facts = []
     if hb.get("version"):

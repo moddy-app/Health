@@ -145,15 +145,15 @@ Le titre est figé à l'ouverture. Un incident qui s'aggrave voit son `level`
 monter et un update s'ajouter, mais garde son titre — le renommer en cours de
 route désoriente les lecteurs qui suivent le fil.
 
-## `degraded` n'est pas public
+## `degraded` est public aussi
 
-Un niveau `degraded` crée bien un incident local — message Discord, bannière
-dashboard, `hm:incident:active` — mais **aucun status report Better Stack**.
-C'est la lecture de « le `degraded` ne crée pas d'incident public » : public =
-la status page. Sinon elle passerait au rouge à chaque hoquet de Redis.
-
-Si l'incident s'aggrave ensuite en `partial_outage`, le report Better Stack est
-créé à ce moment-là sur le même incident, et `bs_report_id` se remplit.
+Un niveau `degraded` publie un report Better Stack comme n'importe quel autre
+niveau. Un service non-critique en panne complète (`aggregate()` ne réserve
+`partial_outage`/`major_outage` qu'aux services de `HM_CRITICAL_SERVICES`)
+reste au niveau `degraded` — le cacher de la status page laisserait un service
+réellement down sans la moindre trace publique. Les seuils de détection
+(`HM_FAILURE_THRESHOLD`, `HM_MIN_SILENCE`) et le rate-limit par service
+suffisent à filtrer le bruit ; il n'y a pas besoin d'un filtre de plus ici.
 
 ## Résolution
 

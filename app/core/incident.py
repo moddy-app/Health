@@ -27,11 +27,6 @@ TYPE_INCIDENT = "incident"
 TYPE_MAINTENANCE = "maintenance"
 TYPE_DEGRADED = "degraded_performance"
 
-# Niveaux qui justifient une publication sur la status page. Le `degraded` ne
-# crée pas d'incident public : sinon la page passe au rouge à chaque hoquet de
-# Redis.
-PUBLIC_LEVELS = {colors.PARTIAL_OUTAGE, colors.MAJOR_OUTAGE}
-
 
 def _type_for(level: str) -> str:
     return TYPE_DEGRADED if level == colors.DEGRADED else TYPE_INCIDENT
@@ -89,13 +84,16 @@ class IncidentManager:
         statuses: dict[str, str],
         notify: bool,
     ) -> None:
-        """Crée le report s'il n'existe pas encore, sinon poste un update."""
+        """Crée le report s'il n'existe pas encore, sinon poste un update.
+
+        Publié quel que soit le niveau — un service non-critique en `degraded`
+        mérite la même visibilité qu'une panne majeure : la status page ne doit
+        pas cacher un « petit truc » sous prétexte qu'il n'affecte rien de
+        critique.
+        """
         if not self._bs.enabled:
             return
         level = incident.get("level", colors.MAJOR_OUTAGE)
-        is_public = level in PUBLIC_LEVELS or incident.get("type") == TYPE_MAINTENANCE
-        if not is_public:
-            return
 
         affected = incident.get("affected") or []
         resources = self._bs.resources_for(affected, statuses, level)

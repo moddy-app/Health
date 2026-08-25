@@ -139,11 +139,21 @@ async def test_unchanged_state_does_not_spam_updates(manager, notifier, snapshot
     assert len((await manager.get_active())["updates"]) == 1
 
 
-async def test_degraded_is_never_published_on_the_status_page(manager, store, snapshot):
+async def test_a_degraded_incident_is_published_too(mapped_settings, store, notifier, snapshot):
+    """Un service non-critique en `degraded` mérite la même visibilité qu'une
+    panne majeure — la status page ne cache pas les petits soucis."""
+    bs = BetterStack(mapped_settings, store)
+
+    async def fake_request(method, path, payload=None):
+        return {"data": {"id": "555", "relationships": {}}}
+
+    bs._request = fake_request
+    manager = IncidentManager(mapped_settings, store, bs, notifier)
+
     await manager.reconcile(snapshot(colors.DEGRADED, {"moddy-bot": "degraded"}))
     incident = await manager.get_active()
     assert incident["type"] == TYPE_DEGRADED
-    assert incident["bs_report_id"] is None
+    assert incident["bs_report_id"] == "555"
 
 
 async def test_recovery_gives_the_service_back_its_right_to_alert(manager, notifier, snapshot):

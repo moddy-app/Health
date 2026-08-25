@@ -51,7 +51,7 @@ DÉTECTION (auto)          COMMANDE (staff)          BETTER STACK
   "created_by": "Moddy Health Monitor",
   "created_at": "2026-08-24T19:42:00Z",
   "resolved_at": "2026-08-24T20:15:00Z",
-  "url": "https://status.moddy.app/en/incident/995593",
+  "url": "https://status.moddy.app/incident/995593",
   "updates": [
     { "kind": "created",  "at": "...", "message": "...", "author": "Moddy Health Monitor" },
     { "kind": "updated",  "at": "...", "message": "...", "author": "Jules" },

@@ -65,12 +65,36 @@ Sans authentification. Destiné au dashboard, au site, et à tout service tiers.
     "affected": ["moddy-bot", "moddy-api", "moddy-website", "moddy-dashboard"],
     "started_at": "2026-08-24T19:42:00Z",
     "resolved_at": null,
-    "url": "https://status.moddy.app/en/incident/1019848",
+    "starts_at": null,
+    "ends_at": null,
+    "url": "https://status.moddy.app/incident/1019848",
     "updates_count": 2,
     "last_update": { "at": "2026-08-24T19:55:00Z",
                      "message": "We identified the issue and have deployed a fix." }
   },
   "maintenance": null
+}
+```
+
+Une maintenance en cours remplit `maintenance` avec la même forme, `starts_at`
+et `ends_at` compris — la fenêtre planifiée par `/status maintenance` :
+
+```json
+"maintenance": {
+  "id": "inc_20260825_0130",
+  "type": "maintenance",
+  "level": "maintenance",
+  "title": "Scheduled Maintenance – API",
+  "message": "We are performing scheduled maintenance on the API.",
+  "affected": ["moddy-api"],
+  "started_at": "2026-08-25T01:30:00Z",
+  "resolved_at": null,
+  "starts_at": "2026-08-25T02:00:00Z",
+  "ends_at": "2026-08-25T04:00:00Z",
+  "url": "https://status.moddy.app/incident/1019849",
+  "updates_count": 1,
+  "last_update": { "at": "2026-08-25T01:30:00Z",
+                   "message": "We are performing scheduled maintenance on the API." }
 }
 ```
 
@@ -90,6 +114,12 @@ la bannière utilisateur lit `status`.
 `services[]` ne liste que les services **surveillés** (`HM_SERVICES`). Website et
 Dashboard n'y figurent pas — ils ne poussent pas de heartbeat — mais peuvent
 apparaître dans `incident.affected`.
+
+`starts_at`/`ends_at` ne sont renseignés que pour une maintenance : ils portent
+la fenêtre planifiée (§`/status maintenance`), pas l'horodatage de publication
+— celui-là reste `started_at`. Pour un incident ordinaire, les deux valent
+`null`. Une maintenance qui n'a pas encore été ouverte par le staff
+n'apparaît nulle part : ce champ ne montre que ce qui est déjà publié.
 
 ### `incident` et `maintenance`
 
@@ -123,20 +153,60 @@ détecteur, puis remise en cache.
 
 Payload minimal pour la bannière du dashboard.
 
+```
+GET /v1/status/banner?service=moddy-dashboard
+```
+
 ```json
 { "level": "partial_outage",
   "title": "Partial Outage – Moddy Bot Unavailable",
-  "url": "https://status.moddy.app/en/incident/1019848" }
+  "url": "https://status.moddy.app/incident/1019848",
+  "message": "**Some Moddy services** are currently unavailable. [View status](https://status.moddy.app/incident/1019848)" }
 ```
 
 Sans incident ni maintenance :
 
 ```json
-{ "level": "operational", "title": null, "url": null }
+{ "level": "operational", "title": null, "url": null, "message": null }
 ```
 
 `level` porte le niveau de l'incident en cours s'il y en a un, sinon le niveau
 global des services.
+
+### `message`
+
+Markdown prêt à afficher — la bannière le rend tel quel. **En gras** l'essentiel,
+et un lien `[View status](url)` vers l'incident ou la maintenance quand une URL
+existe. Générique par défaut :
+
+```
+**Some Moddy services** are currently unavailable. [View status](...)
+```
+
+`?service=<id>` identifie l'appelant. S'il figure dans les services affectés,
+le message le nomme au lieu de rester générique :
+
+```
+**Moddy Bot** is currently unavailable. [View status](...)
+```
+
+Une maintenance ou une dégradation changent le verbe (« is undergoing scheduled
+maintenance », « is experiencing degraded performance »), jamais le principe :
+un service qui n'est pas concerné n'a pas à apprendre lequel l'est. Un
+`service` absent, inconnu, ou non affecté retombe toujours sur le générique —
+jamais d'erreur. Le lien est **toujours** présent : à défaut de report Better
+Stack (pas encore créé, ou intégration désactivée), il pointe sur la status
+page elle-même (`DISCORD_STATUS_PAGE_URL`) plutôt que de disparaître.
+
+Une maintenance ajoute sa fenêtre, tirée de `starts_at`/`ends_at` :
+
+```
+**Some Moddy services** are undergoing scheduled maintenance, from 2026-08-25 02:00 to 04:00 UTC. [View status](...)
+```
+
+La borne de fin ne répète la date que si elle change de jour (`04:00` seul, ou
+`2026-08-26 01:00` si la fenêtre chevauche minuit). Sans les deux bornes,
+aucune fenêtre n'est mentionnée — une moitié de fenêtre serait pire que rien.
 
 ---
 

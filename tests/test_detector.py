@@ -141,8 +141,29 @@ async def test_public_payload_splits_maintenance(detector, settings, store):
         "level": "maintenance",
         "title": "Scheduled Maintenance",
         "status": "open",
+        "starts_at": "2026-08-25T02:00:00Z",
+        "ends_at": "2026-08-25T04:00:00Z",
         "updates": [],
     }
     payload = detector.public_payload(snapshot, incident)
     assert payload["incident"] is None
     assert payload["maintenance"]["title"] == "Scheduled Maintenance"
+    # La fenêtre planifiée doit être lisible sans passer par le bot Discord.
+    assert payload["maintenance"]["starts_at"] == "2026-08-25T02:00:00Z"
+    assert payload["maintenance"]["ends_at"] == "2026-08-25T04:00:00Z"
+
+
+async def test_public_payload_has_no_window_for_a_regular_incident(detector):
+    """`starts_at`/`ends_at` n'existent que pour une maintenance planifiée."""
+    snapshot = detector.current_snapshot()
+    incident = {
+        "id": "inc_2",
+        "type": "incident",
+        "level": "major_outage",
+        "title": "Major Outage",
+        "status": "open",
+        "updates": [],
+    }
+    payload = detector.public_payload(snapshot, incident)
+    assert payload["incident"]["starts_at"] is None
+    assert payload["incident"]["ends_at"] is None

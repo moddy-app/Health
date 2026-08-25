@@ -76,7 +76,7 @@ class IncidentManager:
     def _url_for(self, report_id: str | None) -> str | None:
         if not report_id:
             return None
-        return f"{self._s.discord_status_page_url.rstrip('/')}/en/incident/{report_id}"
+        return f"{self._s.discord_status_page_url.rstrip('/')}/incident/{report_id}"
 
     # ------------------------------------------------------------------
     # Better Stack

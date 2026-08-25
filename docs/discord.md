@@ -196,7 +196,7 @@ bouton lien.
     {
       "type": 9,
       "accessory": { "type": 2, "style": 5, "label": "View Incident",
-                     "url": "https://status.moddy.app/en/incident/995593" },
+                     "url": "https://status.moddy.app/incident/995593" },
       "components": [
         { "type": 10, "content": "### <:error:...> Major Outage – Bot & API Unavailable" }
       ]
@@ -353,33 +353,12 @@ Le bouton `Details` est bleu et porte `<:info:1541808220610363423>` ; le
 `Refresh` du panneau est vert et porte `<:refresh:1541808218760544376>`. Ce
 sont des icônes de bouton : elles n'apparaissent jamais dans du texte.
 
-**Le panneau se remplit sous les yeux.** À l'ouverture comme au refresh, il
-part avec sa structure définitive : mêmes lignes, mêmes séparateurs, mêmes
-mots. Seules les valeurs à venir sont masquées — des tirets sous spoiler
-(`||--||`), à la largeur qu'elles prendront — et les icônes d'état laissent
-leur place au spinner :
-
-```
-### <a:spinner:...> Loading
--# Last updated ||-------------||
-──────────────────────────
-<a:spinner:...> **Moddy Bot** · ||-----------||
--# ||-----|| · up ||-||h||--|| · heartbeat ||-------------||
--# <a:spinner:...> ||-|| checks passing
-```
-
-Le masque s'arrête à la valeur : `up`, `h`, `heartbeat`, `checks passing`
-restent lisibles. Une version masquée perd ses backticks au passage — un
-spoiler ne se rend pas dans du code inline.
-
-Le message mesure donc la même chose en chargement qu'à l'arrivée — sinon il
-grandit sous le curseur à chaque révélation et ce qu'on lisait a bougé de
-place. Deux largeurs ne sont pas déductibles et sont tenues pour acquises : un
-horodatage Discord, rendu en clair (« 3 seconds ago »), et le lien d'un
-incident, dont l'URL ne s'affiche pas.
-
-Chaque service se révèle après son propre délai (0 à 1,2 s), donc l'ordre
-d'arrivée change à chaque fois.
+**Le panneau ne se construit pas à l'écran.** À l'ouverture comme au refresh,
+l'éphémère part avec un simple loader — `<a:spinner:...> Loading…` — remplacé
+par le panneau complet après 0 à 1 s. Ce délai n'attend rien : lire Redis prend
+quelques millisecondes, il laisse seulement le loader s'afficher au lieu de
+clignoter. Une édition qui échoue (éphémère fermé, token expiré) ne casse rien,
+le bouton reste cliquable.
 
 **Les checks se résument, ils ne se dumpent pas.** Le panneau affichait
 `postgres: {'ok': True, 'latency_ms': 4} · redis: {...}` — illisible. En régime

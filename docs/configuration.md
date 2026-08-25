@@ -41,7 +41,7 @@ aucune alerte ne peut partir : tout finit dans la file de rattrapage.
 | `HM_SERVICES` | `moddy-bot,moddy-api,moddy-altguard,moddy-feeds` | Liste exhaustive des services attendus |
 | `HM_CRITICAL_SERVICES` | `moddy-bot,moddy-api` | Filtrée sur `HM_SERVICES` ; détermine partial vs major |
 | `HM_SERVICE_NAMES` | — | `id:Nom d'affichage`, séparés par `,`. Des défauts existent pour les services Moddy |
-| `HM_SERVICE_ORDER` | `moddy-bot,moddy-dashboard,moddy-api,moddy-altguard,moddy-feeds` | Ordre d'affichage — sticky, panneau, `/v1/status`. Un service absent passe après, dans son ordre d'origine |
+| `HM_SERVICE_ORDER` | `moddy-bot,moddy-dashboard,moddy-website,moddy-api,moddy-altguard,moddy-feeds` | Ordre d'affichage — sticky, panneau, `/v1/status`. Un service absent passe après, dans son ordre d'origine |
 | `HM_IMPACT_MAP` | `moddy-bot>*;moddy-api>moddy-website,moddy-dashboard=down,moddy-bot` | Propagation d'impact |
 | `HM_HEARTBEAT_TTL` | `60` | TTL de `hm:hb:{service}` — trois fois l'intervalle d'émission |
 | `HM_CHECK_INTERVAL` | `15` | Période de la boucle de détection |
@@ -85,12 +85,17 @@ en fait un heartbeat synthétique : **un 2xx signifie vivant**, tout le reste
 vaut `down`.
 
 ```env
-HM_PROBE_MAP=moddy-dashboard:https://dashboard.moddy.app/healthz,moddy-website:https://moddy.app
+HM_PROBE_MAP=moddy-dashboard:https://preview.moddy.app/api/health,moddy-website:https://www.moddy.app
 ```
 
 `moddy-website` suit exactement le même système que `moddy-dashboard` : sondé
 plutôt qu'écouté, sans endpoint `/healthz` dédié — la page d'accueil suffit,
 son corps n'est jamais lu.
+
+**`https://moddy.app` (sans `www`) répond `307` vers `https://www.moddy.app`,
+et la sonde ne suit jamais les redirections** (§ci-dessous) : sondé tel quel,
+il aurait été vu `down` en permanence. L'URL configurée doit toujours être
+celle qui répond `2xx` directement.
 
 Le découpage se fait à la première `:`, ce qui laisse le schéma de l'URL intact.
 Un service cité ici n'a pas à l'être aussi dans `HM_SERVICES` : `services` fait

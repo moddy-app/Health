@@ -127,6 +127,11 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
 - **`tree.sync()` global met jusqu'à une heure** à se propager : sync guild.
 - **`status.moddy.app/index.json` renvoie un 302** vers `/en/index.json` : le
   client HTTP doit suivre les redirections.
+- **`https://moddy.app` (sans `www`) répond `307`** vers `https://www.moddy.app`
+  — et la sonde ne suit jamais les redirections (§`core/probe.py`), à raison :
+  un site sondé sur son domaine nu partait `down` en boucle, un vrai faux
+  positif constaté en production. L'URL de `HM_PROBE_MAP` doit répondre `2xx`
+  directement, jamais après un saut.
 - **Les URL d'incident que le monitor construit n'ont pas de segment de
   langue.** `_url_for` génère `/incident/{id}`, pas `/en/incident/{id}` — la
   status page choisit elle-même sa langue à l'affichage.

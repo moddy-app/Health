@@ -123,5 +123,15 @@ def check_icon(ok: bool) -> str:
     return EMOJI_OK if ok else EMOJI_ALERT
 
 
-def headline(level: str) -> str:
+def headline(level: str, *, any_down: bool = False) -> str:
+    """Bandeau du sticky et du panneau de détail.
+
+    `DEGRADED` recouvre deux réalités distinctes : un service réellement lent,
+    et un service non-critique tombé (`aggregate()` ne réserve les niveaux
+    « outage » qu'aux services critiques). Dire « Degraded Performance »
+    quand un service est en fait `down` — constaté en production sur une sonde
+    de site vitrine — annonce moins grave que la réalité.
+    """
+    if level == colors.DEGRADED and any_down:
+        return "Some Services Are Down"
     return LEVEL_HEADLINES.get(level, "Service Disruption")

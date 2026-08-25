@@ -139,7 +139,8 @@ class StatusPresentation:
 
     @property
     def headline(self) -> str:
-        return theme.headline(self.level)
+        any_down = any(service.status == "down" for service in self.services)
+        return theme.headline(self.level, any_down=any_down)
 
     @property
     def emoji(self) -> str:

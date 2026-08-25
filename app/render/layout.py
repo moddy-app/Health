@@ -109,7 +109,10 @@ def status_header(s: StatusPresentation) -> str:
     lines = [f"### {s.emoji} {s.headline}", f"-# Last updated <t:{s.timestamp}:R>"]
     if s.incident_title:
         title = f"[{s.incident_title}]({s.incident_url})" if s.incident_url else s.incident_title
-        lines.append(f"{theme.EMOJI_ONGOING} **{title}**")
+        # `OnGoing`/`Resolved` sont réservés à la ligne « Status: » du message
+        # d'incident : ici, c'est l'icône de niveau qui s'applique, comme dans
+        # le titre juste au-dessus.
+        lines.append(f"{s.emoji} **{title}**")
     return "\n".join(lines)
 
 

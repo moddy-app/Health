@@ -312,3 +312,29 @@ async def test_an_expired_draft_never_publishes_a_half_incident(bot_ctx):
     await severity.PublishButton().callback(interaction)
     assert bot_ctx.incidents.commands == []
     assert "expired" in flatten(interaction.edited.to_components())
+
+def test_a_down_non_critical_service_says_down_not_degraded():
+    """`aggregate()` ne réserve les niveaux « outage » qu'aux services critiques :
+    un site vitrine tombé reste au niveau `degraded`, mais dire « Degraded
+    Performance » quand un service est en fait `down` sous-annonce la panne."""
+    public = {
+        "status": "degraded",
+        "updated_at": "2026-08-25T19:42:00Z",
+        "services": [
+            {"id": "moddy-bot", "name": "Moddy Bot", "status": "operational"},
+            {"id": "moddy-website", "name": "Website", "status": "down"},
+        ],
+    }
+    view = StickyStatusView(StatusPresentation.from_public(public))
+    text = flatten(view.to_components())
+    assert text.startswith(f"### {colors.EMOJI_DEGRADED} Some Services Are Down")
+    assert "Degraded Performance" not in text
+
+
+def test_the_ongoing_incident_line_never_borrows_the_status_line_icons():
+    """`OnGoing`/`Resolved` sont réservés à la ligne « Status: » du message
+    d'incident, jamais au sticky ou au panneau."""
+    view = StickyStatusView(StatusPresentation.from_public(PUBLIC))
+    text = flatten(view.to_components())
+    assert colors.EMOJI_ONGOING not in text
+    assert colors.EMOJI_DEGRADED in text  # l'icône de niveau, à la place

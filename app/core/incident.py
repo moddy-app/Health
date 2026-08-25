@@ -68,6 +68,19 @@ class IncidentManager:
                 continue
         return out
 
+    async def _last_archived(self) -> dict | None:
+        raw = await self._store.lrange(keys.INCIDENT_HISTORY, -1, -1)
+        if not raw:
+            return None
+        try:
+            return json.loads(raw[0])
+        except json.JSONDecodeError:
+            return None
+
+    async def _unarchive_last(self) -> None:
+        """Retire le dernier incident de l'historique — il redevient actif."""
+        await self._store.ltrim(keys.INCIDENT_HISTORY, 0, -2)
+
     def _url_for(self, report_id: str | None) -> str | None:
         if not report_id:
             return None
@@ -452,7 +465,7 @@ class IncidentManager:
             on_foreign_incident=self._adopt,
         )
 
-    async def sync_updates(self) -> dict | None:
+    async def sync_updates(self) -> tuple[dict | None, str]:
         """Recharge les updates de l'incident actif depuis Better Stack.
 
         Une update *éditée* là-bas (texte corrigé sur un update déjà posté) ne
@@ -461,26 +474,45 @@ class IncidentManager:
         jamais le message Discord. Cette commande resynchronise l'historique
         affiché sur celui de Better Stack, à la main, plutôt que d'attendre
         une update qui ne viendra pas.
+
+        Renvoie `(incident, reason)` : plusieurs causes distinctes se
+        ressemblaient sous un seul "rien à recharger" — un incident sans
+        report (jamais publié, faute de ressource mappée dans
+        `HM_BS_RESOURCE_MAP`, ou intégration désactivée) n'a pas le même
+        remède qu'un `index.json` momentanément injoignable.
+
+        Marche aussi sur le dernier incident **clos** : prolonger une
+        maintenance ou rouvrir un incident se fait à la main sur Better
+        Stack, après que le monitor a déjà résolu et archivé le sien. Sans
+        ce chemin, la correction resterait invisible — il n'y a plus
+        d'incident actif pour la recevoir.
         """
         incident = await self.get_active()
-        report_id = incident.get("bs_report_id") if incident else None
+        reopening = incident is None
+        if reopening:
+            incident = await self._last_archived()
+            if incident is None:
+                return None, "no_active"
+
+        report_id = incident.get("bs_report_id")
         if not report_id:
-            return None
+            return None, "not_published"
 
         snapshot = await self._bs.poll_index()
         if snapshot is None:
-            return None
+            return None, "unavailable"
+
         report = next(
             (r for r in snapshot.reports if str(r.get("id")) == str(report_id)), None
         )
-        updates = sorted(
-            (report.get("updates") or []) if report else [],
-            key=lambda u: u.get("published_at") or "",
-        )
-        if not updates:
-            return None
+        if report is None:
+            return None, "not_found"
 
-        incident["updates"] = [
+        updates = sorted(report.get("updates") or [], key=lambda u: u.get("published_at") or "")
+        if not updates:
+            return None, "no_updates"
+
+        new_updates = [
             {
                 "kind": "created" if index == 0 else "updated",
                 "at": update.get("published_at"),
@@ -489,10 +521,24 @@ class IncidentManager:
             }
             for index, update in enumerate(updates)
         ]
+
+        if reopening and len(new_updates) <= len(incident.get("updates") or []):
+            # Rien de neuf depuis la clôture : rouvrir ne ferait que rejouer
+            # ce qui était déjà affiché avant résolution.
+            return None, "already_closed"
+
+        incident["updates"] = new_updates
+        if reopening:
+            incident["status"] = "updating"
+            incident["resolved_at"] = None
+            await self._unarchive_last()
+            log.info("incident %s rouvert depuis Better Stack", incident.get("id"))
         await self._save(incident)
+
         if not await self._notifier.re_render(incident):
             log.warning("resync %s : réédition du message Discord impossible", incident.get("id"))
-        return incident
+            return incident, "reopened_render_failed" if reopening else "render_failed"
+        return incident, "reopened" if reopening else "ok"
 
     async def reconcile_betterstack(self) -> None:
         """Filet de sécurité : rattrape ce qu'un webhook manqué aurait perdu."""

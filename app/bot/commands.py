@@ -23,6 +23,19 @@ def _notice(text: str, accent: int | None = None):
     return build_notice_view(text, accent=accent)
 
 
+# `/status reload` : un message distinct par cause plutôt qu'un seul "rien à
+# recharger" — un incident jamais publié sur Better Stack n'appelle pas le
+# même geste qu'un index.json momentanément injoignable.
+_RELOAD_FAILURE = {
+    "no_active": f"{theme.EMOJI_ALERT} No active or recently closed incident.",
+    "not_published": f"{theme.EMOJI_ALERT} This incident isn't published on Better Stack — nothing to reload.",
+    "unavailable": f"{theme.EMOJI_ALERT} Better Stack is unavailable right now — try again shortly.",
+    "not_found": f"{theme.EMOJI_ALERT} This incident's Better Stack report couldn't be found.",
+    "no_updates": f"{theme.EMOJI_ALERT} Better Stack has no updates for this report yet.",
+    "already_closed": f"{theme.EMOJI_ALERT} Nothing new on Better Stack since this incident was closed.",
+}
+
+
 def staff_only():
     """Réservé au rôle staff, dans la guild du salon de statut."""
 
@@ -98,24 +111,30 @@ class StatusCommands(app_commands.Group):
     )
     @staff_only()
     async def reload(self, interaction: discord.Interaction) -> None:
-        if not await _require_active(interaction):
-            return
+        # Pas de garde `_require_active` : la commande doit aussi rouvrir le
+        # dernier incident clos (maintenance prolongée, incident rouvert à la
+        # main sur Better Stack) — `sync_updates` gère elle-même l'absence
+        # totale d'incident, actif ou archivé.
         await interaction.response.defer(ephemeral=True, thinking=True)
-        incident = await interaction.client.ctx.incidents.sync_updates()
+        incident, reason = await interaction.client.ctx.incidents.sync_updates()
         if incident is None:
             await interaction.followup.send(
                 view=_notice(
-                    f"{theme.EMOJI_ALERT} Nothing to reload — no Better Stack report yet.",
+                    _RELOAD_FAILURE.get(reason, _RELOAD_FAILURE["unavailable"]),
                     colors.ACCENT_DEGRADED,
                 ),
                 ephemeral=True,
             )
             return
         count = len(incident.get("updates") or [])
+        reopened = reason in ("reopened", "reopened_render_failed")
+        failed_render = reason in ("render_failed", "reopened_render_failed")
+        suffix = " (Discord edit failed — check the logs)" if failed_render else ""
+        prefix = "Reopened and reloaded" if reopened else "Reloaded"
         await interaction.followup.send(
             view=_notice(
-                f"{theme.EMOJI_OK} Reloaded {count} update{'s' if count != 1 else ''} "
-                "from Better Stack.",
+                f"{theme.EMOJI_OK} {prefix} {count} update{'s' if count != 1 else ''} "
+                f"from Better Stack.{suffix}",
                 colors.ACCENT_RESOLVED,
             ),
             ephemeral=True,

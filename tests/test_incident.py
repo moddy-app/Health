@@ -483,9 +483,9 @@ async def test_sync_updates_reloads_a_correction_made_on_better_stack(polling, n
         bs_report_id="995593",
     )
 
-    incident = await manager.sync_updates()
+    incident, reason = await manager.sync_updates()
 
-    assert incident is not None
+    assert reason == "ok"
     assert [u["message"] for u in incident["updates"]] == [
         "Investigating.",
         "Fix deployed (corrected wording).",
@@ -500,11 +500,103 @@ async def test_sync_updates_without_a_report_does_nothing(polling, notifier):
     await manager.open(
         title="A", message="m", level=colors.PARTIAL_OUTAGE, affected=["moddy-api"], origin="discord"
     )
-    assert await manager.sync_updates() is None
+    incident, reason = await manager.sync_updates()
+    assert incident is None
+    assert reason == "not_published"
     assert notifier.re_rendered == []
 
 
 async def test_sync_updates_without_an_active_incident_does_nothing(polling, notifier):
     manager = polling([])
-    assert await manager.sync_updates() is None
+    incident, reason = await manager.sync_updates()
+    assert incident is None
+    assert reason == "no_active"
     assert notifier.re_rendered == []
+
+
+async def test_sync_updates_reopens_the_last_closed_incident(polling, notifier, store):
+    """Prolonger une maintenance, ou rouvrir un incident, se fait à la main sur
+    Better Stack après que le monitor a déjà résolu et archivé le sien."""
+    manager = polling(
+        [
+            {
+                "id": "995593",
+                "title": "Scheduled Maintenance",
+                "report_type": "maintenance",
+                "updated_at": iso(),
+                "updates": [
+                    {"id": "u1", "message": "Starting now.", "published_at": "2026-08-24T19:42:00Z"},
+                    {
+                        "id": "u2",
+                        "message": "Maintenance complete.",
+                        "published_at": "2026-08-24T20:00:00Z",
+                    },
+                    # Postée sur Better Stack après notre résolution locale :
+                    # c'est elle qui doit déclencher la réouverture.
+                    {
+                        "id": "u3",
+                        "message": "Extended by 30 minutes.",
+                        "published_at": "2026-08-24T20:30:00Z",
+                    },
+                ],
+            }
+        ]
+    )
+    await manager.open(
+        title="Scheduled Maintenance",
+        message="Starting now.",
+        level=colors.MAINTENANCE,
+        affected=["moddy-api"],
+        origin="discord",
+        type_=TYPE_MAINTENANCE,
+        bs_report_id="995593",
+        starts_at="2026-08-24T19:00:00Z",
+        ends_at="2026-08-24T20:00:00Z",
+    )
+    await manager.resolve(message="Maintenance complete.")
+    assert await manager.get_active() is None
+
+    incident, reason = await manager.sync_updates()
+
+    assert reason == "reopened"
+    assert incident["status"] == "updating"
+    assert incident["resolved_at"] is None
+    assert len(incident["updates"]) == 3
+    assert incident["updates"][-1]["message"] == "Extended by 30 minutes."
+    assert await manager.get_active() is not None
+    assert (await manager.get_active())["id"] == incident["id"]
+    # Retiré de l'historique : ce n'est plus un incident clos.
+    assert all(h["id"] != incident["id"] for h in await manager.history())
+
+
+async def test_sync_updates_does_not_reopen_without_anything_new(polling, notifier):
+    manager = polling(
+        [
+            {
+                "id": "995593",
+                "title": "Billing issue",
+                "report_type": "manual",
+                "updated_at": iso(),
+                "updates": [
+                    {"id": "u1", "message": "Investigating.", "published_at": "2026-08-24T19:42:00Z"},
+                    {"id": "u2", "message": "Resolved.", "published_at": "2026-08-24T20:00:00Z"},
+                ],
+            }
+        ]
+    )
+    await manager.open(
+        title="Billing issue",
+        message="Investigating.",
+        level=colors.PARTIAL_OUTAGE,
+        affected=["moddy-api"],
+        origin="discord",
+        bs_report_id="995593",
+    )
+    await manager.add_update(message="Resolved.")
+    await manager.resolve(message="Resolved.")
+
+    incident, reason = await manager.sync_updates()
+
+    assert incident is None
+    assert reason == "already_closed"
+    assert await manager.get_active() is None

@@ -218,6 +218,25 @@ que dit Better Stack — la première update devient `created`, les suivantes
 d'updates, pas leur contenu — après une correction sans changement de compte,
 `dispatch()` prendrait le message pour déjà à jour et n'éditerait rien.
 
+### Rouvrir le dernier incident clos
+
+Prolonger une maintenance, ou rouvrir un incident, se fait à la main sur
+Better Stack — après que le monitor a déjà résolu et archivé le sien. Sans
+incident actif, la correction n'aurait nulle part où aller. `/status reload`
+regarde donc aussi `hm:incident:history` : si le dernier incident archivé a un
+`bs_report_id` dont Better Stack montre plus d'updates qu'on n'en a gardé, il
+redevient l'incident actif (`status: "updating"`, `resolved_at` effacé, retiré
+de l'historique) et le même message Discord repasse en cours plutôt que
+d'en repartir un nouveau.
+
+Sans update supplémentaire depuis la clôture, rien ne rouvre — rejouer ce
+qui était déjà affiché n'aurait aucun sens.
+
+`ends_at` n'étant pas exposé par `index.json` (même piège que d'habitude),
+`/status reload` ne resynchronise que le texte des updates — la fenêtre
+affichée (`starts_at`..`ends_at`, qui borne l'icône de maintenance, §CLAUDE.md)
+reste celle saisie à l'ouverture et n'est pas recalculée depuis Better Stack.
+
 ## Services affectés d'un incident adopté
 
 Un incident ouvert à la main sur la status page ne connaît que des ressources

@@ -169,6 +169,12 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
   webhook. `/status reload` resynchronise à la main, et réédite Discord par
   `Notifier.re_render()` — `dispatch()` ne verrait rien de nouveau, l'anti-
   doublon ne comptant que le nombre d'updates, pas leur contenu.
+- **`/status reload` rouvre aussi le dernier incident clos.** Prolonger une
+  maintenance ou rouvrir un incident se fait à la main sur Better Stack, après
+  que le monitor a déjà résolu et archivé le sien — sans ce chemin, la
+  correction n'aurait nulle part où aller. Ne rouvre que s'il y a du neuf
+  depuis la clôture (`len(new_updates) > len(updates)`), sinon rejouerait ce
+  qui était déjà affiché.
 - **Le rate-limit se remet à zéro à la reprise d'un service**, sinon toute
   résolution ouvre un angle mort de 5 minutes.
 - **`index.json` porte tout l'historique.** Au premier poll, `hm:bs:seen_updates`

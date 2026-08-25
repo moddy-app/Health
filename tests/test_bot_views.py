@@ -67,6 +67,14 @@ def test_the_details_button_survives_a_redeploy():
     assert row["components"][0]["label"] == "Details"
 
 
+def test_the_loader_is_a_single_line():
+    """Un message de chargement, pas un panneau à moitié rempli."""
+    from app.bot.views import loading_view
+
+    text = flatten(loading_view().to_components())
+    assert text == f"{colors.EMOJI_LOADING} Loading…"
+
+
 def test_the_detail_panel_is_persistent_too():
     """L'éphémère reste affiché après un redéploiement : son bouton doit vivre."""
     view = build_detail_view(StatusPresentation.from_public(PUBLIC), {})
@@ -223,43 +231,6 @@ def test_the_buttons_carry_their_colour_and_icon():
     assert refresh["emoji"]["name"] == "refresh"
 
 
-def test_a_service_not_yet_revealed_keeps_its_words_and_hides_its_values():
-    snapshot = StatusPresentation.from_public(PUBLIC)
-    heartbeats = {"moddy-bot": {"version": "1.4.2", "received_at": "2026-08-24T19:41:50Z"}}
-    text = flatten(build_detail_view(snapshot, heartbeats, revealed=set()).to_components())
-    assert colors.EMOJI_LOADING in text
-    # Ce qui ne change pas reste lisible…
-    assert "**Moddy Bot**" in text and "heartbeat " in text and "Last updated" in text
-    # …et ce qui va s'afficher est masqué, à la largeur qu'il prendra.
-    assert "1.4.2" not in text and "||-----||" in text
-    assert colors.EMOJI_OPERATIONAL not in text
-    # L'en-tête ne conclut rien tant que rien n'est révélé.
-    assert "Loading" in text
-    assert "All Systems Operational" not in text and "Degraded Performance" not in text
-
-
-def test_the_hidden_values_take_the_width_they_will_have():
-    """Des tirets plus courts que la valeur feraient s'élargir le message."""
-    from app.render.layout import service_detail
-
-    service = StatusPresentation.from_public(PUBLIC).services[0]
-    hb = {"version": "1.4.2", "uptime_s": 7300}
-    hidden = service_detail(service, hb, revealed=False).splitlines()
-    shown = service_detail(service, hb, revealed=True).splitlines()
-    # Les `||` du spoiler ne sont pas rendus : on les retire pour comparer.
-    assert len(hidden[1].replace("||", "")) == len(shown[1].replace("`", ""))
-
-
-def test_the_last_reveal_restores_the_full_panel():
-    snapshot = StatusPresentation.from_public(PUBLIC)
-    every = {service.id for service in snapshot.services}
-    view = build_detail_view(snapshot, {}, revealed=every)
-    text = flatten(view.to_components())
-    assert colors.EMOJI_LOADING not in text
-    assert "Degraded Performance" in text
-    assert view.to_components()[0]["accent_color"] == snapshot.accent
-
-
 def test_the_heartbeat_age_is_a_discord_timestamp():
     """Un âge calculé devient faux dès que le panneau reste affiché."""
     snapshot = StatusPresentation.from_public(PUBLIC)
@@ -341,52 +312,3 @@ async def test_an_expired_draft_never_publishes_a_half_incident(bot_ctx):
     await severity.PublishButton().callback(interaction)
     assert bot_ctx.incidents.commands == []
     assert "expired" in flatten(interaction.edited.to_components())
-
-
-def test_the_panel_keeps_its_height_while_loading():
-    """Le message doit mesurer la même chose en chargement qu'une fois rempli :
-    sinon il grandit sous le curseur à chaque révélation."""
-    snapshot = StatusPresentation.from_public(PUBLIC)
-    heartbeats = {
-        "moddy-bot": {
-            "version": "1.4.2",
-            "received_at": "2026-08-24T19:41:50Z",
-            "checks": {"redis": {"ok": True}},
-        }
-    }
-
-    def blocks(view):
-        found: list[str] = []
-
-        def walk(components):
-            for node in components:
-                if node.get("content"):
-                    found.append(node["content"])
-                walk(node.get("components") or [])
-
-        walk(view.to_components())
-        return found
-
-    loading = blocks(build_detail_view(snapshot, heartbeats, revealed=set()))
-    full = blocks(build_detail_view(snapshot, heartbeats))
-    assert [len(b.splitlines()) for b in loading] == [len(b.splitlines()) for b in full]
-
-
-def test_the_structure_is_identical_loading_or_not():
-    """Mêmes séparateurs, mêmes blocs : seul le contenu apparaît."""
-    snapshot = StatusPresentation.from_public(PUBLIC)
-
-    def shape(view):
-        out: list[int] = []
-
-        def walk(components):
-            for node in components:
-                out.append(node["type"])
-                walk(node.get("components") or [])
-
-        walk(view.to_components())
-        return out
-
-    assert shape(build_detail_view(snapshot, {}, revealed=set())) == shape(
-        build_detail_view(snapshot, {})
-    )

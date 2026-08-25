@@ -34,9 +34,10 @@ log = logging.getLogger("hm.bot.views")
 DETAILS_ID = "hm:sticky:refresh"
 DETAILS_REFRESH_ID = "hm:details:refresh"
 
-# Le panneau se remplit service par service, chacun après son propre délai.
-REVEAL_MIN = 0.0
-REVEAL_MAX = 1.2
+# Le temps que met le panneau à s'afficher. Rien à calculer là-dedans : lire
+# Redis prend quelques millisecondes. C'est le temps de voir le loader.
+LOADING_MIN = 0.0
+LOADING_MAX = 1.0
 
 
 async def load_status(ctx) -> tuple[StatusPresentation, dict[str, dict]]:
@@ -90,11 +91,8 @@ class DetailsButton(ui.Button):
             return
         if not await _claim_cooldown(interaction, ctx):
             return
-        snapshot, heartbeats = await load_status(ctx)
-        await interaction.response.send_message(
-            view=DetailView(snapshot, heartbeats, revealed=set()), ephemeral=True
-        )
-        await reveal(interaction, snapshot, heartbeats)
+        await interaction.response.send_message(view=loading_view(), ephemeral=True)
+        await show_details(interaction, ctx)
 
 
 class DetailRefreshButton(ui.Button):
@@ -115,11 +113,8 @@ class DetailRefreshButton(ui.Button):
             return
         if not await _claim_cooldown(interaction, ctx):
             return
-        snapshot, heartbeats = await load_status(ctx)
-        await interaction.response.edit_message(
-            view=DetailView(snapshot, heartbeats, revealed=set())
-        )
-        await reveal(interaction, snapshot, heartbeats)
+        await interaction.response.edit_message(view=loading_view())
+        await show_details(interaction, ctx)
 
 
 class StickyStatusView(BaseView):
@@ -168,33 +163,16 @@ class DetailView(BaseView):
         self,
         snapshot: StatusPresentation | None = None,
         heartbeats: dict[str, dict] | None = None,
-        revealed: set[str] | None = None,
     ) -> None:
         super().__init__()
         heartbeats = heartbeats or {}
-        # `revealed=None` : tout est déjà là. Un ensemble, même vide, veut dire
-        # que le panneau est en train de se remplir.
-        done = set() if snapshot is None else (
-            {service.id for service in snapshot.services} if revealed is None else revealed
-        )
-        complete = snapshot is not None and all(s.id in done for s in snapshot.services)
-        # Le liseré est une information comme une autre : il ne prend sa couleur
-        # qu'une fois tout révélé.
-        container = ui.Container(accent_color=snapshot.accent if complete else None)
+        container = ui.Container(accent_color=snapshot.accent if snapshot else None)
         if snapshot is not None:
-            container.add_item(ui.TextDisplay(status_header(snapshot, revealed=complete)))
+            container.add_item(ui.TextDisplay(status_header(snapshot)))
             for service in snapshot.services:
-                # Même séparateur révélé ou non : la structure du panneau ne
-                # change pas en se remplissant, seul son contenu apparaît.
                 container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
                 container.add_item(
-                    ui.TextDisplay(
-                        service_detail(
-                            service,
-                            heartbeats.get(service.id) or {},
-                            revealed=service.id in done,
-                        )
-                    )
+                    ui.TextDisplay(service_detail(service, heartbeats.get(service.id) or {}))
                 )
         else:
             container.add_item(ui.TextDisplay("### Status"))
@@ -207,40 +185,28 @@ class DetailView(BaseView):
 
 
 def build_detail_view(
-    snapshot: StatusPresentation,
-    heartbeats: dict[str, dict],
-    revealed: set[str] | None = None,
+    snapshot: StatusPresentation, heartbeats: dict[str, dict]
 ) -> BaseView:
-    return DetailView(snapshot, heartbeats, revealed)
+    return DetailView(snapshot, heartbeats)
 
 
-async def reveal(
-    interaction: discord.Interaction,
-    snapshot: StatusPresentation,
-    heartbeats: dict[str, dict],
-) -> None:
-    """Révèle les services un par un, entre 1 et 3 secondes chacun.
+def loading_view() -> BaseView:
+    """Ce qu'on voit le temps que le panneau arrive."""
+    return build_notice_view(f"{colors.EMOJI_LOADING} Loading…")
 
-    Le panneau part vide — un spinner par service — et se remplit ; la dernière
-    édition rend l'en-tête et le liseré. Chaque service a son propre délai, donc
-    l'ordre d'arrivée change à chaque ouverture.
 
-    Une édition qui échoue (éphémère fermé, token expiré) arrête la révélation
-    sans rien casser : l'utilisateur peut toujours rappuyer sur `Refresh`.
+async def show_details(interaction: discord.Interaction, ctx) -> None:
+    """Remplace le loader par le panneau.
+
+    Le délai n'attend rien — lire Redis prend quelques millisecondes — il laisse
+    seulement le loader s'afficher plutôt que de clignoter.
+
+    Une édition qui échoue (éphémère fermé, token expiré) ne casse rien :
+    l'utilisateur peut toujours rappuyer sur le bouton.
     """
-    revealed: set[str] = set()
-    schedule = sorted(
-        (random.uniform(REVEAL_MIN, REVEAL_MAX), service.id) for service in snapshot.services
-    )
-    elapsed = 0.0
-    for at, service_id in schedule:
-        await asyncio.sleep(max(at - elapsed, 0))
-        elapsed = at
-        revealed.add(service_id)
-        try:
-            await interaction.edit_original_response(
-                view=DetailView(snapshot, heartbeats, revealed)
-            )
-        except Exception as exc:
-            log.info("révélation du panneau interrompue: %s", exc)
-            return
+    snapshot, heartbeats = await load_status(ctx)
+    await asyncio.sleep(random.uniform(LOADING_MIN, LOADING_MAX))
+    try:
+        await interaction.edit_original_response(view=DetailView(snapshot, heartbeats))
+    except Exception as exc:
+        log.info("affichage du panneau interrompu: %s", exc)

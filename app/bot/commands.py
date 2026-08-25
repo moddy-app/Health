@@ -14,7 +14,7 @@ from discord import app_commands
 from ..render import colors, theme
 from ..render.layout import build_notice_view
 from . import modals
-from .views import build_detail_view, load_status, reveal
+from .views import loading_view, show_details
 
 log = logging.getLogger("hm.bot.commands")
 
@@ -72,12 +72,9 @@ class StatusCommands(app_commands.Group):
     @app_commands.command(name="check", description="Detailed status, only visible to you")
     @staff_only()
     async def check(self, interaction: discord.Interaction) -> None:
-        snapshot, heartbeats = await load_status(interaction.client.ctx)
-        # Même panneau que le bouton `Details`, révélation comprise.
-        await interaction.response.send_message(
-            view=build_detail_view(snapshot, heartbeats, revealed=set()), ephemeral=True
-        )
-        await reveal(interaction, snapshot, heartbeats)
+        # Même panneau que le bouton `Details`, loader compris.
+        await interaction.response.send_message(view=loading_view(), ephemeral=True)
+        await show_details(interaction, interaction.client.ctx)
 
     @app_commands.command(name="sticky", description="Repost the sticky status message")
     @staff_only()

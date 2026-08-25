@@ -104,47 +104,12 @@ def status_summary(s: StatusPresentation) -> str:
     return "\n".join(lines)
 
 
-# Un horodatage Discord est rendu en clair (« 3 seconds ago ») : sa largeur
-# finale n'est pas celle de la balise, on la tient pour acquise.
-TIMESTAMP_WIDTH = 13
-
-
-def pending(value: str, *, revealed: bool, width: int | None = None) -> str:
-    """La valeur, ou une barre de spoiler de sa largeur en attendant.
-
-    Le panneau garde ainsi sa forme *et* ses dimensions pendant le chargement :
-    les mots fixes restent lisibles (`up`, `heartbeat`, `checks passing`),
-    seule l'information à venir est masquée. Un message qui grandit sous le
-    curseur déplace ce qu'on était en train de lire.
-    """
-    if revealed:
-        return value
-    return "||" + "-" * max(width or len(value), 1) + "||"
-
-
-def status_header(s: StatusPresentation, *, revealed: bool = True) -> str:
-    """En-tête du panneau de détail : le niveau global et rien d'autre.
-
-    Tant que tous les services ne sont pas révélés, l'en-tête ne conclut rien :
-    annoncer « All Systems Operational » avant d'avoir affiché le premier
-    service serait donner la réponse avant la question.
-    """
-    icon = s.emoji if revealed else theme.EMOJI_LOADING
-    headline = s.headline if revealed else "Loading"
-    lines = [
-        f"### {icon} {headline}",
-        "-# Last updated "
-        + pending(f"<t:{s.timestamp}:R>", revealed=revealed, width=TIMESTAMP_WIDTH),
-    ]
+def status_header(s: StatusPresentation) -> str:
+    """En-tête du panneau de détail : le niveau global et rien d'autre."""
+    lines = [f"### {s.emoji} {s.headline}", f"-# Last updated <t:{s.timestamp}:R>"]
     if s.incident_title:
-        if revealed:
-            link = f"[{s.incident_title}]({s.incident_url})" if s.incident_url else s.incident_title
-            lines.append(f"{theme.EMOJI_ONGOING} **{link}**")
-        else:
-            # Le titre masqué, pas le lien : l'URL ne s'affiche jamais, elle ne
-            # doit pas compter dans la largeur.
-            masked = pending(s.incident_title, revealed=False)
-            lines.append(f"{theme.EMOJI_LOADING} **{masked}**")
+        title = f"[{s.incident_title}]({s.incident_url})" if s.incident_url else s.incident_title
+        lines.append(f"{theme.EMOJI_ONGOING} **{title}**")
     return "\n".join(lines)
 
 
@@ -162,7 +127,7 @@ def _check_ok(value) -> bool:
     return True
 
 
-def check_summary(checks: dict, *, revealed: bool = True) -> str | None:
+def check_summary(checks: dict) -> str | None:
     """Une ligne pour tous les checks — le détail seulement quand ça casse.
 
     Le dump brut des dictionnaires était illisible : en régime normal, un
@@ -171,59 +136,39 @@ def check_summary(checks: dict, *, revealed: bool = True) -> str | None:
     """
     if not checks:
         return None
-
-    def hidden(value: str) -> str:
-        return pending(value, revealed=revealed)
-
     failing = [name for name, value in checks.items() if not _check_ok(value)]
-    icon = theme.check_icon(not failing) if revealed else theme.EMOJI_LOADING
     if not failing:
         total = len(checks)
-        return f"{icon} {hidden(str(total))} check{'s' if total > 1 else ''} passing"
+        return f"{theme.check_icon(True)} {total} check{'s' if total > 1 else ''} passing"
     names = ", ".join(name.replace("_", " ") for name in failing)
-    passing = f"{len(checks) - len(failing)}/{len(checks)}"
-    return f"{icon} {hidden(names)} · {hidden(passing)} passing"
+    return f"{theme.check_icon(False)} {names} · {len(checks) - len(failing)}/{len(checks)} passing"
 
 
-def service_detail(service, hb: dict, *, revealed: bool = True) -> str:
+def service_detail(service, hb: dict) -> str:
     """Le bloc d'un service : état, puis les faits qui l'expliquent.
 
     C'est l'outil de diagnostic rapide pendant une crise — version, uptime,
-    dernier heartbeat, checks en échec. Tant qu'il n'est pas révélé, le bloc
-    garde tout ce qui ne change pas — son nom, les mots `up`, `heartbeat` — et
-    remplace par des tirets ce qui va s'afficher, à la largeur que ça prendra.
+    dernier heartbeat, checks en échec.
     """
-    def hidden(value: str, width: int | None = None) -> str:
-        return pending(value, revealed=revealed, width=width)
-
     facts = []
     if hb.get("version"):
-        # Le spoiler ne se rend pas dans du code inline : les backticks sautent
-        # tant que la version n'est pas là.
-        version = str(hb["version"])
-        facts.append(f"`{version}`" if revealed else hidden(version))
+        facts.append(f"`{hb['version']}`")
     uptime = hb.get("uptime_s")
     if uptime is not None:
-        hours, minutes = int(uptime) // 3600, (int(uptime) % 3600) // 60
-        facts.append(f"up {hidden(str(hours))}h{hidden(f'{minutes:02d}')}")
+        facts.append(f"up {int(uptime) // 3600}h{(int(uptime) % 3600) // 60:02d}")
     received = hb.get("received_at")
     # Un timestamp Discord plutôt qu'un âge calculé : le panneau reste juste
     # même quand il reste affiché plusieurs minutes, et chacun le lit dans son
     # fuseau.
-    if received:
-        facts.append("heartbeat " + hidden(f"<t:{unix(received)}:R>", TIMESTAMP_WIDTH))
-    else:
-        facts.append(hidden("no heartbeat"))
+    facts.append(f"heartbeat <t:{unix(received)}:R>" if received else "no heartbeat")
     if service.impacted_by:
-        facts.append("impacted by " + hidden(", ".join(service.impacted_by)))
+        facts.append("impacted by " + ", ".join(service.impacted_by))
 
-    icon = theme.service_icon(service.status) if revealed else theme.EMOJI_LOADING
-    lines = [f"{icon} **{service.name}** · {hidden(service.label)}"]
+    lines = [f"{theme.service_icon(service.status)} **{service.name}** · {service.label}"]
     lines.append("-# " + " · ".join(facts))
-    summary = check_summary(hb.get("checks") or {}, revealed=revealed)
+    summary = check_summary(hb.get("checks") or {})
     if summary:
         lines.append(f"-# {summary}")
-
     return "\n".join(lines)
 
 

@@ -184,7 +184,18 @@ class DetailView(BaseView):
         if snapshot is not None:
             container.add_item(ui.TextDisplay(status_header(snapshot, revealed=complete)))
             for service in snapshot.services:
-                container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
+                # Un service pas encore révélé n'est séparé que par du vide : le
+                # panneau s'aère en attendant, et les traits n'arrivent qu'avec
+                # les faits qu'elles séparent.
+                shown = service.id in done
+                container.add_item(
+                    ui.Separator(
+                        visible=shown,
+                        spacing=discord.SeparatorSpacing.small
+                        if shown
+                        else discord.SeparatorSpacing.large,
+                    )
+                )
                 container.add_item(
                     ui.TextDisplay(
                         service_detail(

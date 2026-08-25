@@ -10,6 +10,11 @@ STATE = "hm:state:{service}"
 INCIDENT_ACTIVE = "hm:incident:active"
 INCIDENT_HISTORY = "hm:incident:history"
 INCIDENT_HISTORY_MAX = 100
+# Incident saisi dans le modal, en attente du choix de sévérité par service.
+# Dans le store plutôt qu'en mémoire de la View : un redéploiement au mauvais
+# moment ne doit pas perdre ce que le staff vient d'écrire.
+INCIDENT_DRAFT = "hm:incident:draft:{user}"
+INCIDENT_DRAFT_TTL = 900
 
 # Better Stack
 BS_OWNED = "hm:bs:owned"

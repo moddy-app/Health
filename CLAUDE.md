@@ -85,6 +85,9 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
 - **Le webhook ne peut pas éditer un message posté par le bot.** L'échec
   d'édition déclenche un repost, pas une perte. Réciproquement, tant que le
   webhook répond, le bot ne touche pas à un fil qui lui appartient.
+- **Un modal ne peut pas en ouvrir un second.** Discord ne l'autorise qu'en
+  réponse à une commande ou à un composant : la sévérité par service se demande
+  dans un panneau éphémère, pas dans un deuxième modal. Voir `bot/severity.py`.
 - **`send_modal` ne s'annule pas.** `/status update` et `/status resolve`
   vérifient l'incident actif *avant* d'ouvrir le modal.
 - **Une vue persistante sans `add_view` est morte au redéploiement**, et Railway

@@ -112,7 +112,7 @@ def status_header(s: StatusPresentation, *, revealed: bool = True) -> str:
     service serait donner la réponse avant la question.
     """
     if not revealed:
-        return f"### {theme.EMOJI_LOADING} Checking services…"
+        return f"### {theme.EMOJI_LOADING} Checking services"
     lines = [f"### {s.emoji} {s.headline}", f"-# Last updated <t:{s.timestamp}:R>"]
     if s.incident_title:
         title = f"[{s.incident_title}]({s.incident_url})" if s.incident_url else s.incident_title
@@ -159,7 +159,7 @@ def service_detail(service, hb: dict, *, revealed: bool = True) -> str:
     ne montre que son nom : pas d'icône d'état, pas de fait à moitié lu.
     """
     if not revealed:
-        return f"{theme.EMOJI_LOADING} **{service.name}**"
+        return f"{theme.EMOJI_LOADING} {service.name}"
 
     facts = []
     if hb.get("version"):

@@ -356,6 +356,10 @@ class IncidentManager:
         if action == "incident.create":
             level = payload.get("level") or colors.PARTIAL_OUTAGE
             affected = payload.get("affected") or []
+            # L'état de chaque service vient du panneau de sévérité. Sans lui,
+            # tout service affecté partirait en `downtime` sur la status page,
+            # y compris ceux qui ne font que ralentir.
+            statuses = payload.get("statuses") or None
             if await self.get_active():
                 # Un seul incident à la fois : la commande enrichit l'existant.
                 return await self.add_update(
@@ -364,6 +368,7 @@ class IncidentManager:
                     level=level,
                     affected=affected,
                     notify=notify,
+                    statuses=statuses,
                 )
             return await self.open(
                 title=payload.get("title") or _auto_title(level, affected, self._s),
@@ -373,6 +378,7 @@ class IncidentManager:
                 origin="discord",
                 author=author,
                 notify=notify,
+                statuses=statuses,
             )
 
         if action == "incident.update":

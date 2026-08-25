@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.bot import modals
+from app.bot import modals, severity
 from app.bot.views import DETAILS_ID, DETAILS_REFRESH_ID, StickyStatusView, build_detail_view
 from app.config import Settings
 from app.render import colors
@@ -119,6 +119,36 @@ def test_the_detail_panel_names_only_the_failing_checks():
     assert "1/2 passing" in text
 
 
+class FakeInteraction:
+    """Le strict nécessaire d'une interaction : qui clique, et ce qu'on répond."""
+
+    def __init__(self, user_id: int = 1, done: bool = False, ctx=None) -> None:
+        self.user = SimpleNamespace(id=user_id, display_name="Jules")
+        self.sent = None
+        self.edited = None
+        self.followups: list = []
+        self.client = SimpleNamespace(ctx=ctx)
+        self.response = SimpleNamespace(
+            is_done=lambda: done,
+            send_message=self._send,
+            edit_message=self._edit,
+            defer=self._defer,
+        )
+        self.followup = SimpleNamespace(send=self._followup)
+
+    async def _send(self, *, view=None, ephemeral=False):
+        self.sent = view
+
+    async def _edit(self, *, view=None):
+        self.edited = view
+
+    async def _defer(self, **kwargs):
+        return None
+
+    async def _followup(self, *, view=None, ephemeral=False):
+        self.followups.append(view)
+
+
 @pytest.fixture
 def ctx():
     return SimpleNamespace(settings=Settings(redis_url=""), incidents=None)
@@ -220,3 +250,78 @@ def test_the_heartbeat_age_is_a_discord_timestamp():
     heartbeats = {"moddy-bot": {"received_at": "2026-08-24T19:41:50Z"}}
     text = flatten(build_detail_view(snapshot, heartbeats).to_components())
     assert "heartbeat <t:1787600510:R>" in text
+
+
+# ----------------------------------------------------------------------
+# Sévérité par service — le deuxième temps de /status incident
+# ----------------------------------------------------------------------
+class Recorder:
+    """Doublure d'IncidentManager : on vérifie ce qui lui est demandé."""
+
+    def __init__(self) -> None:
+        self.commands: list[tuple[str, dict]] = []
+
+    async def handle_command(self, action, payload):
+        self.commands.append((action, payload))
+        return {"title": payload.get("title"), "url": None}
+
+
+@pytest.fixture
+def bot_ctx(store):
+    from app.config import Settings
+
+    return SimpleNamespace(
+        settings=Settings(redis_url="", hm_services="moddy-bot,moddy-api"),
+        store=store,
+        incidents=Recorder(),
+    )
+
+
+async def test_the_create_modal_asks_for_severity_before_publishing(bot_ctx):
+    """Le modal est plein : l'état de chaque service se demande juste après."""
+    modal = modals.IncidentCreateModal(bot_ctx)
+    interaction = FakeInteraction(user_id=7)
+    await modal.on_submit(interaction)
+
+    assert bot_ctx.incidents.commands == []  # rien n'est publié à ce stade
+    draft = await severity.load_draft(bot_ctx, 7)
+    assert draft is not None and draft["level"] == colors.PARTIAL_OUTAGE
+    assert interaction.sent is not None
+
+
+def test_unselected_services_are_reported_as_degraded():
+    """Sans cette étape, un service qui ralentit partait en `downtime`."""
+    draft = {"affected": ["moddy-bot", "moddy-api"], "down": ["moddy-bot"]}
+    assert severity.statuses_for(draft) == {"moddy-bot": "down", "moddy-api": "degraded"}
+    # Rien de coché : tout est down, comme avant l'étape de sévérité.
+    assert severity.statuses_for({"affected": ["moddy-api"]}) == {"moddy-api": "down"}
+
+
+async def test_publishing_carries_the_per_service_statuses(bot_ctx):
+    await severity.save_draft(
+        bot_ctx,
+        7,
+        {
+            "title": "API is slow",
+            "message": "Investigating.",
+            "level": colors.DEGRADED,
+            "affected": ["moddy-bot", "moddy-api"],
+            "down": ["moddy-bot"],
+            "author": "Jules",
+        },
+    )
+    interaction = FakeInteraction(user_id=7, ctx=bot_ctx)
+    await severity.PublishButton().callback(interaction)
+
+    action, payload = bot_ctx.incidents.commands[0]
+    assert action == "incident.create"
+    assert payload["statuses"] == {"moddy-bot": "down", "moddy-api": "degraded"}
+    # Le brouillon ne doit pas pouvoir être publié deux fois.
+    assert await severity.load_draft(bot_ctx, 7) is None
+
+
+async def test_an_expired_draft_never_publishes_a_half_incident(bot_ctx):
+    interaction = FakeInteraction(user_id=7, ctx=bot_ctx)
+    await severity.PublishButton().callback(interaction)
+    assert bot_ctx.incidents.commands == []
+    assert "expired" in flatten(interaction.edited.to_components())

@@ -355,17 +355,22 @@ sont des icônes de bouton : elles n'apparaissent jamais dans du texte.
 
 **Le panneau se remplit sous les yeux.** À l'ouverture comme au refresh, il
 part avec sa structure définitive : mêmes lignes, mêmes séparateurs, mêmes
-mots. Seules les valeurs à venir sont masquées, par des tirets à la largeur
-qu'elles prendront, et les icônes d'état laissent leur place au spinner :
+mots. Seules les valeurs à venir sont masquées — des tirets sous spoiler
+(`||--||`), à la largeur qu'elles prendront — et les icônes d'état laissent
+leur place au spinner :
 
 ```
 ### <a:spinner:...> Loading
--# Last updated -------------
+-# Last updated ||-------------||
 ──────────────────────────
-<a:spinner:...> **Moddy Bot** · -----------
--# `-----` · up ---- · heartbeat -------------
--# <a:spinner:...> ----------------
+<a:spinner:...> **Moddy Bot** · ||-----------||
+-# ||-----|| · up ||-||h||--|| · heartbeat ||-------------||
+-# <a:spinner:...> ||-|| checks passing
 ```
+
+Le masque s'arrête à la valeur : `up`, `h`, `heartbeat`, `checks passing`
+restent lisibles. Une version masquée perd ses backticks au passage — un
+spoiler ne se rend pas dans du code inline.
 
 Le message mesure donc la même chose en chargement qu'à l'arrivée — sinon il
 grandit sous le curseur à chaque révélation et ce qu'on lisait a bougé de

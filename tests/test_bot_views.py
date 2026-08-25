@@ -231,7 +231,7 @@ def test_a_service_not_yet_revealed_keeps_its_words_and_hides_its_values():
     # Ce qui ne change pas reste lisible…
     assert "**Moddy Bot**" in text and "heartbeat " in text and "Last updated" in text
     # …et ce qui va s'afficher est masqué, à la largeur qu'il prendra.
-    assert "1.4.2" not in text and "`-----`" in text
+    assert "1.4.2" not in text and "||-----||" in text
     assert colors.EMOJI_OPERATIONAL not in text
     # L'en-tête ne conclut rien tant que rien n'est révélé.
     assert "Loading" in text
@@ -246,7 +246,8 @@ def test_the_hidden_values_take_the_width_they_will_have():
     hb = {"version": "1.4.2", "uptime_s": 7300}
     hidden = service_detail(service, hb, revealed=False).splitlines()
     shown = service_detail(service, hb, revealed=True).splitlines()
-    assert len(hidden[1]) == len(shown[1])
+    # Les `||` du spoiler ne sont pas rendus : on les retire pour comparer.
+    assert len(hidden[1].replace("||", "")) == len(shown[1].replace("`", ""))
 
 
 def test_the_last_reveal_restores_the_full_panel():

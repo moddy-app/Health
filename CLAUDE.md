@@ -148,8 +148,9 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
   positif constaté en production. L'URL de `HM_PROBE_MAP` doit répondre `2xx`
   directement, jamais après un saut. Même piège côté navigateur : c'est
   `https://www.moddy.app` que le fetch envoie comme origine, pas le domaine
-  nu — `HM_CORS_ORIGINS` doit lister les deux, sinon CORS bloque le site
-  vitrine.
+  nu — d'où `HM_CORS_ORIGIN_REGEX`, qui autorise tout `*.moddy.app` plutôt que
+  d'énumérer chaque sous-domaine dans `HM_CORS_ORIGINS` et de prendre du
+  retard à chaque nouveau module.
 - **Les URL d'incident que le monitor construit n'ont pas de segment de
   langue.** `_url_for` génère `/incident/{id}`, pas `/en/incident/{id}` — la
   status page choisit elle-même sa langue à l'affichage.

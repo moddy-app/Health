@@ -286,10 +286,25 @@ def test_the_bot_no_longer_has_an_http_command_route(client):
     assert client.post("/ingest/command", json={}, headers=TOKEN).status_code == 404
 
 
-def test_cors_allows_the_website_at_its_real_redirected_origin():
-    """`moddy.app` (sans `www`) répond 307 vers `www.moddy.app` : c'est cette
-    origine que le navigateur envoie réellement, sans quoi `fetch` depuis le
-    site vitrine est bloqué par CORS."""
-    from app.config import Settings
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://moddy.app",
+        # `moddy.app` (sans `www`) répond 307 vers `www.moddy.app` : c'est
+        # cette origine que le navigateur envoie réellement.
+        "https://www.moddy.app",
+        "https://dashboard.moddy.app",
+        "https://preview.moddy.app",  # URL réelle du dashboard
+        # Un module qui n'existe pas encore aujourd'hui : le motif couvre tout
+        # sous-domaine de moddy.app sans qu'on ait à l'énumérer.
+        "https://some-future-module.moddy.app",
+    ],
+)
+def test_cors_allows_any_moddy_app_subdomain(client, origin):
+    response = client.get("/v1/status", headers={"Origin": origin})
+    assert response.headers["access-control-allow-origin"] == origin
 
-    assert "https://www.moddy.app" in Settings(redis_url="").cors_origins
+
+def test_cors_rejects_an_unrelated_origin(client):
+    response = client.get("/v1/status", headers={"Origin": "https://evil.example"})
+    assert "access-control-allow-origin" not in response.headers

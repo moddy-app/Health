@@ -164,11 +164,17 @@ ensemble et la redondance ne servirait à rien.
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `HM_PUBLIC_RATE_LIMIT` | `60/minute` | `N/unité`, unités `second`, `minute`, `hour`, `day` |
-| `HM_CORS_ORIGINS` | `https://moddy.app,https://www.moddy.app,https://dashboard.moddy.app` | Origines autorisées |
+| `HM_CORS_ORIGIN_REGEX` | `^https://([a-z0-9-]+\.)*moddy\.app$` | Autorise tout sous-domaine de `moddy.app` |
+| `HM_CORS_ORIGINS` | — | Origines supplémentaires, hors `*.moddy.app`, séparées par `,` |
 | `HM_PUBLIC_CACHE_TTL` | `30` | TTL de `hm:status:public` et `max-age` du header |
 
 Une valeur `HM_PUBLIC_RATE_LIMIT` illisible retombe silencieusement sur
 `60/minute` plutôt que d'empêcher le démarrage.
+
+`HM_CORS_ORIGIN_REGEX` couvre `moddy.app` et n'importe lequel de ses
+sous-domaines (`www`, `dashboard`, `preview`, un futur module) en un seul
+motif : ajouter un module ne demande donc pas de toucher cette variable.
+`HM_CORS_ORIGINS` ne sert qu'à des origines qui ne sont pas sous `moddy.app`.
 
 ## Propriétés dérivées
 

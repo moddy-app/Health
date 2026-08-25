@@ -134,7 +134,7 @@ sa couleur selon `level`.
 |---|---|
 | Rate limit | `HM_PUBLIC_RATE_LIMIT` (60/minute) par IP, middleware maison sur le store |
 | Cache | `hm:status:public`, TTL 30s, calculé dans la boucle de check |
-| CORS | `HM_CORS_ORIGINS`, méthodes `GET` uniquement, sans credentials |
+| CORS | `HM_CORS_ORIGIN_REGEX` (tout `*.moddy.app`) + `HM_CORS_ORIGINS`, méthodes `GET` uniquement, sans credentials |
 | Header | `Cache-Control: public, max-age=30` |
 
 L'IP est lue dans `X-Forwarded-For` (premier élément) puis `request.client.host` :

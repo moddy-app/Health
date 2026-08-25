@@ -80,12 +80,17 @@ Détail du modèle : [detection.md](detection.md#propagation-dimpact).
 | `HM_PROBE_TIMEOUT` | `10` | Timeout d'une requête, en secondes |
 
 Pour les services qui n'ont aucun process capable de pousser un heartbeat — un
-dashboard est un site statique. Le monitor `GET` l'URL et en fait un heartbeat
-synthétique : **un 2xx signifie vivant**, tout le reste vaut `down`.
+dashboard ou un site vitrine sont des sites statiques. Le monitor `GET` l'URL et
+en fait un heartbeat synthétique : **un 2xx signifie vivant**, tout le reste
+vaut `down`.
 
 ```env
-HM_PROBE_MAP=moddy-dashboard:https://dashboard.moddy.app/healthz
+HM_PROBE_MAP=moddy-dashboard:https://dashboard.moddy.app/healthz,moddy-website:https://moddy.app
 ```
+
+`moddy-website` suit exactement le même système que `moddy-dashboard` : sondé
+plutôt qu'écouté, sans endpoint `/healthz` dédié — la page d'accueil suffit,
+son corps n'est jamais lu.
 
 Le découpage se fait à la première `:`, ce qui laisse le schéma de l'URL intact.
 Un service cité ici n'a pas à l'être aussi dans `HM_SERVICES` : `services` fait

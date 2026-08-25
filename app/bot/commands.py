@@ -69,6 +69,13 @@ class StatusCommands(app_commands.Group):
     async def maintenance(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(modals.MaintenanceModal(interaction.client.ctx))
 
+    @app_commands.command(name="cancel", description="Cancel the active maintenance")
+    @staff_only()
+    async def cancel(self, interaction: discord.Interaction) -> None:
+        if not await _require_active_maintenance(interaction):
+            return
+        await interaction.response.send_modal(modals.MaintenanceCancelModal(interaction.client.ctx))
+
     @app_commands.command(name="check", description="Detailed status, only visible to you")
     @staff_only()
     async def check(self, interaction: discord.Interaction) -> None:
@@ -93,6 +100,20 @@ async def _require_active(interaction: discord.Interaction) -> bool:
         return True
     await interaction.response.send_message(
         view=_notice(f"{theme.EMOJI_ALERT} No active incident.", colors.ACCENT_DEGRADED),
+        ephemeral=True,
+    )
+    return False
+
+
+async def _require_active_maintenance(interaction: discord.Interaction) -> bool:
+    """`/status resolve` clôt n'importe quel incident : `/status cancel` ne
+    doit annuler qu'une maintenance — se tromper de commande sur un incident
+    ordinaire prêterait à confusion."""
+    active = await interaction.client.ctx.incidents.get_active()
+    if active and active.get("type") == "maintenance":
+        return True
+    await interaction.response.send_message(
+        view=_notice(f"{theme.EMOJI_ALERT} No active maintenance.", colors.ACCENT_DEGRADED),
         ephemeral=True,
     )
     return False

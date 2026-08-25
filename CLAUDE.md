@@ -88,6 +88,16 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
 - **Un modal ne peut pas en ouvrir un second.** Discord ne l'autorise qu'en
   réponse à une commande ou à un composant : la sévérité par service se demande
   dans un panneau éphémère, pas dans un deuxième modal. Voir `bot/severity.py`.
+- **La fenêtre de maintenance se saisit en heure française**, pas en UTC — le
+  staff ne pense pas en UTC. `parse_window` convertit avant stockage ;
+  `starts_at`/`ends_at` restent en UTC partout ailleurs.
+- **L'icône de maintenance ne sort jamais de `starts_at`..`ends_at`.** Une
+  maintenance ouverte à l'avance, ou pas encore résolue après coup, ne doit pas
+  la porter hors de sa fenêtre — et sans les deux bornes, impossible d'affirmer
+  qu'on est « pendant » : elle reste alors masquée.
+- **`/status cancel` n'agit que sur une maintenance active.** `/status resolve`
+  clôt n'importe quel incident : un `cancel` qui ferait pareil sur un incident
+  ordinaire prêterait à confusion sur ce qui vient d'être clos.
 - **`send_modal` ne s'annule pas.** `/status update` et `/status resolve`
   vérifient l'incident actif *avant* d'ouvrir le modal.
 - **Une vue persistante sans `add_view` est morte au redéploiement**, et Railway

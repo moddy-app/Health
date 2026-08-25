@@ -72,7 +72,7 @@ def build_header_container(p: IncidentPresentation) -> dict:
             "accessory": {
                 "type": TYPE_BUTTON,
                 "style": BUTTON_STYLE_LINK,
-                "label": "View Incident",
+                "label": p.link_label,
                 "url": p.url,
             },
             "components": [title],

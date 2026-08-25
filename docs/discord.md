@@ -207,6 +207,10 @@ bouton lien.
 }
 ```
 
+Le libellé du bouton dit « View Incident », sauf pour une maintenance
+planifiée — « View » tout court, une fenêtre de maintenance n'étant pas un
+incident à consulter.
+
 Sans URL — incident `degraded`, ou Better Stack injoignable — la Section est
 remplacée par un simple TextDisplay : l'API refuse une Section sans `accessory`,
 et un bouton lien avec une URL vide lève à l'envoi.
@@ -279,6 +283,29 @@ Un message permanent en bas du salon, avec une ligne par service :
 ──────────────────────────
 [ Details ]  [ Status Page ]
 ```
+
+Pendant une maintenance planifiée, chaque service qu'elle couvre porte l'icône
+`<:maintenance:...>` à la place de son icône d'état réel — et la ligne du titre
+sous le bandeau (`Ongoing: {titre}`) la porte aussi, plutôt que l'icône du
+niveau agrégé :
+
+```
+### <:check_circle:...> All Systems Operational
+-# Last updated <t:1787000000:R>
+
+<:check_circle:...>  ``Moddy Bot``  Operational
+<:maintenance:...>   ``API      ``  Operational
+──────────────────────────
+<:maintenance:...> **Scheduled Maintenance**
+──────────────────────────
+[ Details ]  [ Status Page ]
+```
+
+Une maintenance n'entre pas dans `aggregate()` (§4) : le bandeau reste fidèle à
+l'état réel des services, seule l'icône par service et celle du titre suivent
+la fenêtre en cours. `StatusPresentation.icon_for()`/`incident_icon` portent
+cette règle, lues sur `maintenance.affected` de `/v1/status` — jamais une
+logique par service (§6).
 
 Trois déclencheurs le font bouger, et ils peuvent tomber ensemble :
 

@@ -104,6 +104,13 @@ def test_header_carries_link_button():
     assert section["type"] == TYPE_SECTION
     assert section["accessory"]["style"] == 5
     assert section["accessory"]["url"] == INCIDENT["url"]
+    assert section["accessory"]["label"] == "View Incident"
+
+
+def test_a_maintenance_link_button_just_says_view():
+    """Une maintenance planifiée n'est pas un « incident » à consulter."""
+    header, _ = render(type="maintenance", level="maintenance")
+    assert header["components"][0]["accessory"]["label"] == "View"
 
 
 def test_header_without_url_degrades_to_text():

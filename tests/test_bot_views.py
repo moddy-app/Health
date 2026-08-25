@@ -338,3 +338,40 @@ def test_the_ongoing_incident_line_never_borrows_the_status_line_icons():
     text = flatten(view.to_components())
     assert colors.EMOJI_ONGOING not in text
     assert colors.EMOJI_DEGRADED in text  # l'icône de niveau, à la place
+
+
+MAINTENANCE_PUBLIC = {
+    "status": "operational",
+    "updated_at": "2026-08-25T19:00:00Z",
+    "services": [
+        {"id": "moddy-bot", "name": "Moddy Bot", "status": "operational"},
+        {"id": "moddy-api", "name": "API", "status": "operational"},
+    ],
+    "maintenance": {
+        "title": "Scheduled Maintenance",
+        "url": "https://status.moddy.app/incident/1",
+        "affected": ["moddy-api"],
+    },
+}
+
+
+def test_a_service_under_maintenance_shows_the_maintenance_icon():
+    """L'état réel du service ne compte pas : la fenêtre de maintenance prime."""
+    snapshot = StatusPresentation.from_public(MAINTENANCE_PUBLIC)
+    text = flatten(StickyStatusView(snapshot).to_components())
+    assert f"{colors.EMOJI_MAINTENANCE} ``API" in text
+    assert f"{colors.EMOJI_OPERATIONAL} ``Moddy Bot" in text  # non couvert : son icône réelle
+
+
+def test_the_maintenance_title_line_carries_the_maintenance_icon_too():
+    snapshot = StatusPresentation.from_public(MAINTENANCE_PUBLIC)
+    text = flatten(StickyStatusView(snapshot).to_components())
+    assert f"{colors.EMOJI_MAINTENANCE} **Scheduled Maintenance**" in text
+    assert colors.EMOJI_ONGOING not in text
+
+
+def test_a_regular_incident_does_not_borrow_the_maintenance_icon():
+    public = {**PUBLIC, "maintenance": None}
+    snapshot = StatusPresentation.from_public(public)
+    text = flatten(StickyStatusView(snapshot).to_components())
+    assert colors.EMOJI_MAINTENANCE not in text

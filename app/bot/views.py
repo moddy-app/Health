@@ -35,8 +35,8 @@ DETAILS_ID = "hm:sticky:refresh"
 DETAILS_REFRESH_ID = "hm:details:refresh"
 
 # Le panneau se remplit service par service, chacun après son propre délai.
-REVEAL_MIN = 1.0
-REVEAL_MAX = 3.0
+REVEAL_MIN = 0.0
+REVEAL_MAX = 2.0
 
 
 async def load_status(ctx) -> tuple[StatusPresentation, dict[str, dict]]:
@@ -184,18 +184,9 @@ class DetailView(BaseView):
         if snapshot is not None:
             container.add_item(ui.TextDisplay(status_header(snapshot, revealed=complete)))
             for service in snapshot.services:
-                # Un service pas encore révélé n'est séparé que par du vide : le
-                # panneau s'aère en attendant, et les traits n'arrivent qu'avec
-                # les faits qu'elles séparent.
-                shown = service.id in done
-                container.add_item(
-                    ui.Separator(
-                        visible=shown,
-                        spacing=discord.SeparatorSpacing.small
-                        if shown
-                        else discord.SeparatorSpacing.large,
-                    )
-                )
+                # Même séparateur révélé ou non : la structure du panneau ne
+                # change pas en se remplissant, seul son contenu apparaît.
+                container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
                 container.add_item(
                     ui.TextDisplay(
                         service_detail(

@@ -104,19 +104,35 @@ def status_summary(s: StatusPresentation) -> str:
     return "\n".join(lines)
 
 
+# Une marque gauche-à-droite : un caractère invisible qui compte quand même.
+# Discord avale une ligne réellement vide — et un `-#` sans rien derrière n'est
+# pas rendu du tout — donc le bloc rétrécirait en attendant.
+BLANK = "\u200e"
+
+
+def _blanked(lines: list[str], head: str) -> str:
+    """Le même bloc, vidé de ses faits : autant de lignes, aucune information.
+
+    Le panneau doit mesurer la même chose en chargement qu'une fois rempli —
+    sinon le message grandit sous le curseur à chaque révélation, et ce qu'on
+    lisait a bougé de place.
+    """
+    return "\n".join([head, *(f"-# {BLANK}" for _ in lines[1:])])
+
+
 def status_header(s: StatusPresentation, *, revealed: bool = True) -> str:
     """En-tête du panneau de détail : le niveau global et rien d'autre.
 
-    Tant que tous les services ne sont pas révélés, l'en-tête ne conclut rien :
-    annoncer « All Systems Operational » avant d'avoir affiché le premier
-    service serait donner la réponse avant la question.
+    Tant que tous les services ne sont pas révélés, l'en-tête garde sa forme
+    mais ne dit rien : annoncer « All Systems Operational » avant d'avoir
+    affiché le premier service serait donner la réponse avant la question.
     """
-    if not revealed:
-        return f"### {theme.EMOJI_LOADING} Checking services"
     lines = [f"### {s.emoji} {s.headline}", f"-# Last updated <t:{s.timestamp}:R>"]
     if s.incident_title:
         title = f"[{s.incident_title}]({s.incident_url})" if s.incident_url else s.incident_title
         lines.append(f"{theme.EMOJI_ONGOING} **{title}**")
+    if not revealed:
+        return _blanked(lines, f"### {theme.EMOJI_LOADING} {BLANK}")
     return "\n".join(lines)
 
 
@@ -158,9 +174,6 @@ def service_detail(service, hb: dict, *, revealed: bool = True) -> str:
     dernier heartbeat, checks en échec. Tant qu'il n'est pas révélé, le service
     ne montre que son nom : pas d'icône d'état, pas de fait à moitié lu.
     """
-    if not revealed:
-        return f"{theme.EMOJI_LOADING} {service.name}"
-
     facts = []
     if hb.get("version"):
         facts.append(f"`{hb['version']}`")
@@ -180,6 +193,11 @@ def service_detail(service, hb: dict, *, revealed: bool = True) -> str:
     summary = check_summary(hb.get("checks") or {})
     if summary:
         lines.append(f"-# {summary}")
+
+    if not revealed:
+        # Même structure qu'une fois révélé : l'icône devient un spinner, les
+        # faits laissent leur place blanche, et le bloc garde sa hauteur.
+        return _blanked(lines, f"{theme.EMOJI_LOADING} **{service.name}** · {BLANK}")
     return "\n".join(lines)
 
 

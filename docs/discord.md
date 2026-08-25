@@ -353,21 +353,28 @@ Le bouton `Details` est bleu et porte `<:info:1541808220610363423>` ; le
 `Refresh` du panneau est vert et porte `<:refresh:1541808218760544376>`. Ce
 sont des icônes de bouton : elles n'apparaissent jamais dans du texte.
 
-**Le panneau se remplit sous les yeux.** À l'ouverture comme au refresh, tout
-part avec un spinner et aucun fait, les services séparés par du vide plutôt que
-par des traits :
+**Le panneau se remplit sous les yeux.** À l'ouverture comme au refresh, il
+part avec sa structure définitive — mêmes lignes, mêmes séparateurs — mais les
+icônes remplacées par le spinner et les faits laissés blancs :
 
 ```
-### <a:spinner:...> Checking services
-
-<a:spinner:...> Moddy Bot
-
-<a:spinner:...> Dashboard
-
-<a:spinner:...> API
+### <a:spinner:...> ​
+-# ​
+──────────────────────────
+<a:spinner:...> **Moddy Bot** · ​
+-# ​
+──────────────────────────
+<a:spinner:...> **API** · ​
+-# ​
 ```
 
-Chaque service se révèle après son propre délai (1 à 3 s), donc l'ordre
+Chaque bloc garde **exactement** le nombre de lignes qu'il aura une fois
+rempli : le message mesure la même chose en chargement qu'à l'arrivée, sinon il
+grandit sous le curseur à chaque révélation et ce qu'on lisait a bougé de
+place. Le blanc est une marque gauche-à-droite (`U+200E`) — Discord avale une
+ligne réellement vide, et un `-#` sans rien derrière n'est pas rendu du tout.
+
+Chaque service se révèle après son propre délai (0 à 2 s), donc l'ordre
 d'arrivée change à chaque fois. L'en-tête et le
 liseré arrivent en dernier — annoncer « All Systems Operational » avant
 d'avoir montré le premier service reviendrait à donner la réponse avant la

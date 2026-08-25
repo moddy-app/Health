@@ -132,6 +132,8 @@ parfaitement fonctionnel sur Discord seul.
 | `DISCORD_GUILD_ID` | — | Serveur ; les commandes y sont synchronisées, et les `/status` refusées ailleurs |
 | `DISCORD_STATUS_CHANNEL_ID` | — | Salon du sticky et des incidents |
 | `DISCORD_STAFF_ROLE_ID` | — | Rôle autorisé sur `/status *`. Vide ⇒ repli sur la permission `manage_guild` |
+| `DISCORD_ALERT_ROLE_ID` | `1424466344832925847` | Rôle prévenu à chaque incident publié. Vide ⇒ aucune mention de rôle |
+| `HM_ESCALATE_SERVICES` | `moddy-bot,moddy-dashboard,moddy-api` | Services dont la panne ajoute un `@here` à la mention |
 | `DISCORD_WEBHOOK_URL` | — | Second maillon de la redondance, **créé à la main** dans le salon |
 | `DISCORD_STATUS_PAGE_URL` | `https://status.moddy.app` | Base des URLs d'incident reconstruites, et bouton du sticky |
 | `HM_BOT_ACK_TIMEOUT` | `5` | Secondes avant de considérer que le bot n'a pas pris et de basculer webhook |

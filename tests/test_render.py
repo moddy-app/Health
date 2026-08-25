@@ -153,3 +153,26 @@ def test_embed_fallback_keeps_the_essentials():
     assert embed["title"] == INCIDENT["title"]
     assert embed["url"] == INCIDENT["url"]
     assert embed["color"] == colors.ACCENT_RESOLVED
+
+
+def test_a_visible_service_gets_the_role_and_here():
+    """Bot, dashboard, API : ce que voit un utilisateur réveille le salon."""
+    from app.config import Settings
+
+    settings = Settings(redis_url="", discord_alert_role_id="42")
+    assert settings.mention_line(["moddy-api"]) == "<@&42> / @here"
+    assert settings.mention_line(["moddy-feeds"]) == "<@&42>"
+    assert settings.mention_line([]) == "<@&42>"
+    assert Settings(redis_url="", discord_alert_role_id="").mention_line(["moddy-bot"]) == "@here"
+
+
+def test_the_mention_line_sits_under_the_header():
+    body = build_raw_components(
+        IncidentPresentation.from_incident(INCIDENT, NAMES, mentions="<@&42> / @here")
+    )[0]["components"][1]["content"]
+    assert body.endswith("\n-# <@&42> / @here")
+
+
+def test_no_mention_configured_means_no_line():
+    body = render()[0]["components"][1]["content"]
+    assert "-#" not in body

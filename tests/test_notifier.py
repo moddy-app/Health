@@ -36,14 +36,17 @@ class FakeWebhook:
         self.sent = 0
         self.edited: list[str] = []
         self.components: list[list[dict]] = []
+        self.contents: list[str] = []
 
-    async def send(self, components, embed=None):
+    async def send(self, components, embed=None, content=""):
         self.sent += 1
         self.components.append(components)
+        self.contents.append(content)
         return self.message_id
 
-    async def edit(self, message_id, components, embed=None):
+    async def edit(self, message_id, components, embed=None, content=""):
         self.edited.append(message_id)
+        self.contents.append(content)
         return self.message_id is not None
 
 

@@ -102,6 +102,9 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
 - **Un update d'incident ne part que si `state_fingerprint` a bougé.** Comparer
   le niveau ou `affected` ne suffit pas : l'un n'est jamais réécrit hors `auto`,
   l'autre ne distingue pas `degraded` de `down`.
+- **Une mention dans un embed ne prévient personne**, et un message Components
+  V2 ne peut pas porter de `content` : le repli webhook est le seul endroit où
+  `content` est rempli. Voir `_embed_payload`.
 - **Les émojis doivent appartenir à l'application** (application emojis), sinon
   le rendu casse dans le chemin webhook.
 - **Le `custom_id` du bouton du sticky ne se renomme pas.** C'est à lui que le

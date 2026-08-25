@@ -158,6 +158,31 @@ Monitor, via le portail développeur. C'est la seule option qui garantisse un
 rendu correct dans les deux chemins d'envoi : un émoji appartenant à un serveur
 que l'application ne connaît pas s'affiche cassé côté webhook.
 
+### Mentions
+
+Le message d'incident prévient lui-même, en petit, sous l'en-tête :
+
+```
+**Status:** <:OnGoing:...>On Going
+-# <@&1424466344832925847> / @here
+```
+
+`DISCORD_ALERT_ROLE_ID` est mentionné à chaque incident ; le `@here` ne
+s'ajoute que si l'incident touche un service de `HM_ESCALATE_SERVICES` — le
+bot, le dashboard ou l'API, ce qu'un utilisateur voit tomber. Une panne de
+Feeds ne réveille pas le salon. Aucune de ces deux listes n'est écrite dans le
+rendu : `Settings.mention_line()` rend une chaîne, le renderer l'affiche (§6).
+
+- **La mention vit dans le message, pas à côté.** Discord ne repingue pas à
+  l'édition : l'alerte part une fois, à la publication, et les updates qui
+  suivent réutilisent le même message sans re-notifier.
+- **Le repli embed la porte en `content`.** Une mention placée dans un embed ne
+  prévient personne, et un message Components V2 n'a pas le droit d'avoir de
+  `content` : c'est donc uniquement dans le repli que `content` est rempli.
+- **Permission requise.** Sans `Mention @everyone, @here and All Roles`, le
+  `@here` s'affiche sans prévenir personne — et le rôle aussi, s'il n'est pas
+  lui-même mentionnable.
+
 ### Container 1 — en-tête
 
 `accent_color` selon le niveau, une Section (`type: 9`) portant le titre et un

@@ -113,6 +113,11 @@ class Settings(BaseSettings):
     discord_guild_id: str = ""
     discord_status_channel_id: str = ""
     discord_staff_role_id: str = ""
+    # Rôle prévenu à chaque incident publié dans le salon.
+    discord_alert_role_id: str = "1424466344832925847"
+    # Services dont la panne vaut un `@here` en plus du rôle : ceux qu'un
+    # utilisateur voit tomber. Une panne de Feeds n'a pas à réveiller le salon.
+    hm_escalate_services: str = "moddy-bot,moddy-dashboard,moddy-api"
     # Créé à la main dans le salon, jamais par cette application : si l'app est
     # suspendue, le webhook doit lui survivre.
     discord_webhook_url: str = ""
@@ -182,6 +187,25 @@ class Settings(BaseSettings):
         """
         rank = {service: index for index, service in enumerate(_csv(self.hm_service_order))}
         return sorted(services, key=lambda service: rank.get(service, len(rank)))
+
+    @property
+    def escalate_services(self) -> list[str]:
+        return _csv(self.hm_escalate_services)
+
+    def mention_line(self, affected: list[str]) -> str:
+        """Qui prévenir pour cet incident — rien d'autre qu'une chaîne de texte.
+
+        Le rôle est prévenu à chaque fois ; le `@here` ne part que si un service
+        visible de l'utilisateur est touché. Les deux sont de la configuration :
+        aucune liste de services n'est écrite dans le rendu (§6).
+        """
+        mentions = []
+        if self.discord_alert_role_id:
+            mentions.append(f"<@&{self.discord_alert_role_id}>")
+        escalate = set(self.escalate_services)
+        if any(service in escalate for service in affected or []):
+            mentions.append("@here")
+        return " / ".join(mentions)
 
     @property
     def bs_resource_map(self) -> dict[str, str]:

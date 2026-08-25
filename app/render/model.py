@@ -55,6 +55,8 @@ class IncidentPresentation:
     message: str = ""
     created_at: str | None = None
     updates: list[IncidentUpdate] = field(default_factory=list)
+    # Déjà résolue par la configuration : le rendu ne sait pas qui prévenir.
+    mentions: str = ""
 
     @property
     def resolved(self) -> bool:
@@ -83,10 +85,14 @@ class IncidentPresentation:
 
     @classmethod
     def from_incident(
-        cls, incident: dict, names: dict[str, str] | None = None
+        cls,
+        incident: dict,
+        names: dict[str, str] | None = None,
+        mentions: str = "",
     ) -> IncidentPresentation:
         names = names or {}
         return cls(
+            mentions=mentions,
             title=incident.get("title") or "Incident",
             level=incident.get("level") or colors.MAJOR_OUTAGE,
             status=incident.get("status") or theme.OPEN,

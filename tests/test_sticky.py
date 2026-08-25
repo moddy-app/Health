@@ -32,13 +32,18 @@ class FakeChannel:
         self.sent: list[int] = []
         self.edited: list[int] = []
         self.deleted: list[int] = []
+        self.third_party: list[int] = []
+        self.order: list[int] = []
         self._next = 100
 
-    async def send(self, **_):
+    async def send(self, **kwargs):
         self._next += 1
         message = FakeMessage(self._next, self)
         self.messages[message.id] = message
-        self.sent.append(message.id)
+        self.order.append(message.id)
+        # Le sticky poste avec une View ; un tiers, non. Les distinguer rend
+        # les assertions lisibles.
+        (self.sent if "view" in kwargs else self.third_party).append(message.id)
         return message
 
     async def fetch_message(self, message_id: int):
@@ -46,6 +51,15 @@ class FakeChannel:
         if message is None:
             raise LookupError("unknown message")
         return message
+
+    def history(self, limit: int = 1):
+        ordered = [self.messages[mid] for mid in self.order if mid in self.messages]
+
+        async def _iter():
+            for message in reversed(ordered[-limit:]):
+                yield message
+
+        return _iter()
 
 
 class FakeBot:
@@ -102,7 +116,8 @@ async def test_a_third_party_message_reposts_at_the_bottom(sticky):
     await manager.refresh(PUBLIC)
     first = channel.sent[0]
 
-    manager.on_channel_message(999)
+    await channel.send()  # un tiers parle : le sticky n'est plus le dernier
+    manager.on_channel_message(channel.order[-1])
     await asyncio.sleep(0.05)
     assert len(channel.sent) == 2
     # L'ancien est supprimé avant que le nouveau ne parte.
@@ -114,9 +129,11 @@ async def test_a_burst_of_messages_produces_a_single_repost(sticky):
     manager, channel, *_ = sticky
     await manager.refresh(PUBLIC)
 
-    for message_id in range(900, 910):
-        manager.on_channel_message(message_id)
+    for _ in range(10):
+        await channel.send()
+        manager.on_channel_message(channel.order[-1])
     await asyncio.sleep(0.05)
+    # Dix messages tiers, un seul repost : c'est tout l'intérêt du debounce.
     assert len(channel.sent) == 2
 
 
@@ -163,3 +180,58 @@ async def test_a_disabled_sticky_never_posts(store):
     manager.on_channel_message(999)
     await asyncio.sleep(0.05)
     assert channel.sent == []
+
+
+async def test_the_sticky_never_reposts_over_its_own_message(sticky):
+    """Le bug de production : dix stickys empilés dans le salon.
+
+    `channel.send()` n'a pas encore rendu l'ID que la gateway a déjà livré le
+    MESSAGE_CREATE. Le sticky ne se reconnaissait pas, se croyait poussé par un
+    tiers, et repostait — ce qui produisait le message suivant.
+    """
+    manager, channel, *_ = sticky
+    await manager.refresh(PUBLIC)
+    posted = channel.sent[0]
+
+    # L'événement arrive « en retard », après que l'ID a été enregistré.
+    manager.on_channel_message(posted)
+    await asyncio.sleep(0.05)
+    assert len(channel.sent) == 1
+
+
+async def test_a_repost_is_skipped_when_the_sticky_is_already_at_the_bottom(sticky):
+    """Le filet qui ferme la course : rien à descendre s'il est déjà en bas."""
+    manager, channel, *_ = sticky
+    await manager.refresh(PUBLIC)
+
+    # L'ID nous est encore inconnu au moment de l'événement (la course).
+    manager.on_channel_message(999_999)
+    await asyncio.sleep(0.05)
+    assert len(channel.sent) == 1
+    assert channel.deleted == []
+
+
+async def test_a_real_third_party_message_still_pushes_the_sticky_down(sticky):
+    manager, channel, *_ = sticky
+    await manager.refresh(PUBLIC)
+    first = channel.sent[0]
+
+    # Un vrai message tiers : il devient le dernier du salon.
+    await channel.send()
+    manager.on_channel_message(channel.order[-1])
+    await asyncio.sleep(0.05)
+
+    assert len(channel.sent) == 2
+    assert channel.deleted == [first]
+
+
+async def test_ten_of_its_own_messages_produce_no_repost(sticky):
+    """Même en rafale, le sticky ne se déclenche jamais sur lui-même."""
+    manager, channel, *_ = sticky
+    await manager.refresh(PUBLIC)
+
+    for _ in range(10):
+        manager.on_channel_message(channel.sent[-1])
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
+    assert len(channel.sent) == 1

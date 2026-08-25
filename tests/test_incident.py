@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app import keys
-from app.core.detector import DOWN, OPERATIONAL, ServiceState, Snapshot
+from app.core.detector import DEGRADED, DOWN, OPERATIONAL, ServiceState, Snapshot
 from app.core.impact import ImpactGraph
 from app.core.incident import TYPE_DEGRADED, TYPE_MAINTENANCE, IncidentManager
 from app.integrations.betterstack import BetterStack
@@ -245,8 +245,13 @@ async def test_an_adopted_incident_stops_producing_updates(manager, snapshot, st
     assert incident["level"] == colors.PARTIAL_OUTAGE
 
 
-async def test_the_rate_limit_covers_updates_without_a_new_service(manager, snapshot, notifier):
-    """Sans service de plus, l'update passait sans consulter le rate-limit."""
+async def test_a_real_transition_is_always_reported(manager, snapshot, notifier):
+    """Le rate-limit ne doit pas avaler un vrai changement d'état.
+
+    Il garde l'*ouverture* d'un incident ; une fois l'incident ouvert, c'est la
+    signature de l'état observé qui décide, sinon une reprise de service passe
+    à la trappe pendant cinq minutes.
+    """
     notifier.allowed = False
     await manager.open(
         title="Ouvert à la main",
@@ -258,7 +263,34 @@ async def test_the_rate_limit_covers_updates_without_a_new_service(manager, snap
     await manager.reconcile(
         snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": DOWN, "moddy-api": DOWN})
     )
-    assert len((await manager.get_active())["updates"]) == 1
+    assert len((await manager.get_active())["updates"]) == 2
+
+
+async def test_one_update_per_change_and_not_one_more(manager, snapshot):
+    """Le comportement demandé : un update par changement réel, jamais de répétition."""
+    steps = [
+        # (état observé, updates attendus au total)
+        ({"moddy-bot": DOWN, "moddy-api": OPERATIONAL}, 1),   # ouverture
+        ({"moddy-bot": DOWN, "moddy-api": OPERATIONAL}, 1),   # rien n'a bougé
+        ({"moddy-bot": DOWN, "moddy-api": OPERATIONAL}, 1),
+        ({"moddy-bot": DOWN, "moddy-api": DOWN}, 2),          # l'API tombe
+        ({"moddy-bot": DOWN, "moddy-api": DOWN}, 2),          # rien n'a bougé
+        ({"moddy-bot": DOWN, "moddy-api": OPERATIONAL}, 3),   # l'API revient
+        ({"moddy-bot": DOWN, "moddy-api": OPERATIONAL}, 3),
+    ]
+    for statuses, expected in steps:
+        level = colors.MAJOR_OUTAGE if statuses["moddy-api"] == DOWN else colors.PARTIAL_OUTAGE
+        await manager.reconcile(snapshot(level, statuses))
+        assert len((await manager.get_active())["updates"]) == expected
+
+
+async def test_a_service_going_from_degraded_to_down_is_a_change(manager, snapshot):
+    """`affected` ne distingue pas les deux : la signature, si."""
+    await manager.reconcile(snapshot(colors.PARTIAL_OUTAGE, {"moddy-bot": DEGRADED}))
+    before = len((await manager.get_active())["updates"])
+
+    await manager.reconcile(snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": DOWN}))
+    assert len((await manager.get_active())["updates"]) == before + 1
 
 
 async def test_a_staff_update_is_never_deduplicated(manager):

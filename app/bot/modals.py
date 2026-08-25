@@ -194,7 +194,8 @@ class IncidentCreateModal(_StaffModal, title="Create Incident"):
         return {
             "title": self.incident_title.component.value,
             "message": self.message.component.value,
-            "level": (self.level.component.values or [colors.PARTIAL_OUTAGE])[0],
+            # `RadioGroup` est un choix unique : il rend `value`, pas `values`.
+            "level": self.level.component.value or colors.PARTIAL_OUTAGE,
             "affected": list(self.affected.component.values),
             "notify": bool(self.notify.component.values),
             "author": interaction.user.display_name,

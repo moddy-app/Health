@@ -349,6 +349,21 @@ rejoue le panneau sur place (vue persistante elle aussi).
 -# <:exclamation:...> redis · 1/2 passing
 ```
 
+Le bouton `Details` est bleu et porte `<:info:1541808220610363423>` ; le
+`Refresh` du panneau est vert et porte `<:refresh:1541808218760544376>`. Ce
+sont des icônes de bouton : elles n'apparaissent jamais dans du texte.
+
+**Le panneau se remplit sous les yeux.** À l'ouverture comme au refresh, tout
+part avec un spinner et aucun fait : chaque service se révèle après son propre
+délai (1 à 3 s), donc l'ordre d'arrivée change à chaque fois. L'en-tête et le
+liseré arrivent en dernier — annoncer « All Systems Operational » avant
+d'avoir montré le premier service reviendrait à donner la réponse avant la
+question. Une édition qui échoue (éphémère fermé, token expiré) arrête la
+révélation sans rien casser.
+
+**L'âge du heartbeat est un timestamp Discord** (`<t:...:R>`), pas un âge
+calculé : un panneau éphémère reste ouvert, et « 2s ago » vieillit à l'écran.
+
 **Les checks se résument, ils ne se dumpent pas.** Le panneau affichait
 `postgres: {'ok': True, 'latency_ms': 4} · redis: {...}` — illisible. En régime
 normal un compteur suffit ; en panne, seuls les checks en échec sont nommés.

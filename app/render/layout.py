@@ -12,9 +12,8 @@ import logging
 import discord
 from discord import ui
 
-from ..util import age_seconds
 from . import theme
-from .model import IncidentPresentation, StatusPresentation
+from .model import IncidentPresentation, StatusPresentation, unix
 from .raw import header_body, header_title, update_text, visible_updates
 
 log = logging.getLogger("hm.render")
@@ -105,8 +104,15 @@ def status_summary(s: StatusPresentation) -> str:
     return "\n".join(lines)
 
 
-def status_header(s: StatusPresentation) -> str:
-    """En-tête du panneau de détail : le niveau global et rien d'autre."""
+def status_header(s: StatusPresentation, *, revealed: bool = True) -> str:
+    """En-tête du panneau de détail : le niveau global et rien d'autre.
+
+    Tant que tous les services ne sont pas révélés, l'en-tête ne conclut rien :
+    annoncer « All Systems Operational » avant d'avoir affiché le premier
+    service serait donner la réponse avant la question.
+    """
+    if not revealed:
+        return f"### {theme.EMOJI_LOADING} Checking services…"
     lines = [f"### {s.emoji} {s.headline}", f"-# Last updated <t:{s.timestamp}:R>"]
     if s.incident_title:
         title = f"[{s.incident_title}]({s.incident_url})" if s.incident_url else s.incident_title
@@ -145,20 +151,27 @@ def check_summary(checks: dict) -> str | None:
     return f"{theme.check_icon(False)} {names} · {len(checks) - len(failing)}/{len(checks)} passing"
 
 
-def service_detail(service, hb: dict) -> str:
+def service_detail(service, hb: dict, *, revealed: bool = True) -> str:
     """Le bloc d'un service : état, puis les faits qui l'expliquent.
 
-    C'est l'outil de diagnostic rapide pendant une crise — version, uptime, âge
-    du dernier heartbeat, checks en échec.
+    C'est l'outil de diagnostic rapide pendant une crise — version, uptime,
+    dernier heartbeat, checks en échec. Tant qu'il n'est pas révélé, le service
+    ne montre que son nom : pas d'icône d'état, pas de fait à moitié lu.
     """
+    if not revealed:
+        return f"{theme.EMOJI_LOADING} **{service.name}**"
+
     facts = []
     if hb.get("version"):
         facts.append(f"`{hb['version']}`")
     uptime = hb.get("uptime_s")
     if uptime is not None:
         facts.append(f"up {int(uptime) // 3600}h{(int(uptime) % 3600) // 60:02d}")
-    age = age_seconds(hb.get("received_at"))
-    facts.append(f"heartbeat {int(age)}s ago" if age is not None else "no heartbeat")
+    received = hb.get("received_at")
+    # Un timestamp Discord plutôt qu'un âge calculé : le panneau reste juste
+    # même quand il reste affiché plusieurs minutes, et chacun le lit dans son
+    # fuseau.
+    facts.append(f"heartbeat <t:{unix(received)}:R>" if received else "no heartbeat")
     if service.impacted_by:
         facts.append("impacted by " + ", ".join(service.impacted_by))
 

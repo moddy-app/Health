@@ -161,3 +161,62 @@ def test_the_affected_group_never_allows_more_choices_than_it_offers(ctx):
 def test_the_maintenance_window_is_parsed_from_a_single_field(raw, expected):
     """Deux champs séparés feraient six composants : au-dessus de la limite."""
     assert modals.parse_window(raw) == expected
+
+
+def test_every_modal_can_read_its_own_components(ctx):
+    """Les composants ne rendent pas tous la même chose : `RadioGroup` a `value`,
+    `CheckboxGroup` a `values`. Se tromper de nom fait tomber le modal au submit,
+    après que le staff a tout tapé."""
+    interaction = SimpleNamespace(user=SimpleNamespace(display_name="Jules"))
+    payload = modals.IncidentCreateModal(ctx).build_payload(interaction)
+    assert payload["level"] == colors.PARTIAL_OUTAGE  # rien de coché : le défaut
+    assert payload["affected"] == [] and payload["notify"] is False
+    assert payload["author"] == "Jules"
+
+    for modal in (modals.IncidentUpdateModal(ctx), modals.IncidentResolveModal(ctx)):
+        assert modal.build_payload(interaction)["author"] == "Jules"
+    # Fenêtre vide : le modal refuse au lieu de lever.
+    assert modals.MaintenanceModal(ctx).build_payload(interaction) is None
+
+
+def test_the_buttons_carry_their_colour_and_icon():
+    row = StickyStatusView().to_components()[0]["components"][-1]
+    details = row["components"][0]
+    assert details["style"] == 1  # primary, bleu
+    assert details["emoji"]["name"] == "info"
+
+    row = build_detail_view(StatusPresentation.from_public(PUBLIC), {}).to_components()[0][
+        "components"
+    ][-1]
+    refresh = row["components"][0]
+    assert refresh["style"] == 3  # success, vert
+    assert refresh["emoji"]["name"] == "refresh"
+
+
+def test_a_service_not_yet_revealed_shows_nothing_but_a_spinner():
+    snapshot = StatusPresentation.from_public(PUBLIC)
+    heartbeats = {"moddy-bot": {"version": "1.4.2", "received_at": "2026-08-24T19:41:50Z"}}
+    text = flatten(build_detail_view(snapshot, heartbeats, revealed=set()).to_components())
+    assert colors.EMOJI_LOADING in text
+    assert "1.4.2" not in text
+    assert colors.EMOJI_OPERATIONAL not in text
+    # L'en-tête ne conclut rien tant que rien n'est révélé.
+    assert "All Systems Operational" not in text and "Degraded Performance" not in text
+
+
+def test_the_last_reveal_restores_the_full_panel():
+    snapshot = StatusPresentation.from_public(PUBLIC)
+    every = {service.id for service in snapshot.services}
+    view = build_detail_view(snapshot, {}, revealed=every)
+    text = flatten(view.to_components())
+    assert colors.EMOJI_LOADING not in text
+    assert "Degraded Performance" in text
+    assert view.to_components()[0]["accent_color"] == snapshot.accent
+
+
+def test_the_heartbeat_age_is_a_discord_timestamp():
+    """Un âge calculé devient faux dès que le panneau reste affiché."""
+    snapshot = StatusPresentation.from_public(PUBLIC)
+    heartbeats = {"moddy-bot": {"received_at": "2026-08-24T19:41:50Z"}}
+    text = flatten(build_detail_view(snapshot, heartbeats).to_components())
+    assert "heartbeat <t:1787600510:R>" in text

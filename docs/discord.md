@@ -368,10 +368,14 @@ icônes remplacées par le spinner et les faits laissés blancs :
 -# ​
 ```
 
+Chaque bloc garde **exactement** le nombre de lignes qu'il aura une fois
+rempli : le message mesure la même chose en chargement qu'à l'arrivée, sinon il
+grandit sous le curseur à chaque révélation et ce qu'on lisait a bougé de
+place. Le blanc est un espace de largeur nulle — Discord avale une ligne
+réellement vide.
+
 Chaque service se révèle après son propre délai (0,3 à 1 s), donc l'ordre
-d'arrivée change à chaque fois. Le blanc est un espace de largeur nulle :
-Discord avale une ligne réellement vide, et le panneau sauterait à chaque
-révélation au lieu de se remplir sur place. L'en-tête et le
+d'arrivée change à chaque fois. L'en-tête et le
 liseré arrivent en dernier — annoncer « All Systems Operational » avant
 d'avoir montré le premier service reviendrait à donner la réponse avant la
 question. Une édition qui échoue (éphémère fermé, token expiré) arrête la

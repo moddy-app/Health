@@ -325,3 +325,52 @@ async def test_an_expired_draft_never_publishes_a_half_incident(bot_ctx):
     await severity.PublishButton().callback(interaction)
     assert bot_ctx.incidents.commands == []
     assert "expired" in flatten(interaction.edited.to_components())
+
+
+def test_the_panel_keeps_its_height_while_loading():
+    """Le message doit mesurer la même chose en chargement qu'une fois rempli :
+    sinon il grandit sous le curseur à chaque révélation."""
+    snapshot = StatusPresentation.from_public(PUBLIC)
+    heartbeats = {
+        "moddy-bot": {
+            "version": "1.4.2",
+            "received_at": "2026-08-24T19:41:50Z",
+            "checks": {"redis": {"ok": True}},
+        }
+    }
+
+    def blocks(view):
+        found: list[str] = []
+
+        def walk(components):
+            for node in components:
+                if node.get("content"):
+                    found.append(node["content"])
+                walk(node.get("components") or [])
+
+        walk(view.to_components())
+        return found
+
+    loading = blocks(build_detail_view(snapshot, heartbeats, revealed=set()))
+    full = blocks(build_detail_view(snapshot, heartbeats))
+    assert [len(b.splitlines()) for b in loading] == [len(b.splitlines()) for b in full]
+
+
+def test_the_structure_is_identical_loading_or_not():
+    """Mêmes séparateurs, mêmes blocs : seul le contenu apparaît."""
+    snapshot = StatusPresentation.from_public(PUBLIC)
+
+    def shape(view):
+        out: list[int] = []
+
+        def walk(components):
+            for node in components:
+                out.append(node["type"])
+                walk(node.get("components") or [])
+
+        walk(view.to_components())
+        return out
+
+    assert shape(build_detail_view(snapshot, {}, revealed=set())) == shape(
+        build_detail_view(snapshot, {})
+    )

@@ -439,13 +439,21 @@ jusqu'à une heure à se propager, celui d'une guild est instantané.
 | Commande | Effet |
 |---|---|
 | `/status incident` | Modal de création |
-| `/status update` | Modal d'update sur l'incident actif |
-| `/status resolve` | Modal de résolution |
+| `/status update` | Modal d'update sur l'incident actif — maintenance comprise |
+| `/status resolve` | Modal de résolution — clôt aussi une maintenance |
 | `/status maintenance` | Modal de maintenance planifiée |
 | `/status cancel` | Modal d'annulation de la maintenance active |
 | `/status check` | État détaillé (éphémère) |
 | `/status sticky` | Force le repost du sticky |
 | `/status reload` | Resynchronise les updates de l'incident actif depuis Better Stack |
+
+**Hors création, une commande vaut pour un incident comme pour une
+maintenance** : `update`, `resolve` et `reload` agissent sur
+`hm:incident:active` quel qu'en soit le type. Seuls les mots changent — une
+maintenance se *termine*, elle ne « se résout » pas — d'où le titre et le
+message par défaut adaptés au type de l'incident actif. Le sens inverse n'est
+pas vrai : `/status incident` et `/status maintenance` créent chacun le leur, et
+`/status cancel` reste réservé à une maintenance.
 
 Le bot ne parle jamais à Better Stack : il appelle
 `IncidentManager.handle_command`, dans ce process. Toute la logique d'incident
@@ -482,6 +490,11 @@ sans réponse laisse l'interaction en échec visible.
   au staff. `cancel` vérifie en plus que ce soit une maintenance —
   `/status resolve` clôt n'importe quel incident, `/status cancel` refuse
   s'il n'y en a pas.
+- **Clore une maintenance avant l'heure referme aussi sa fenêtre côté Better
+  Stack.** Un report de maintenance n'est pas clos par un update — il n'accepte
+  même pas `resolved` : c'est `starts_at`/`ends_at` qui parlent. Sans le `PATCH`
+  de `IncidentManager.resolve`, la status page continuerait d'annoncer une
+  maintenance que le staff vient de terminer.
 - **La fenêtre de maintenance tient en un seul champ**
   (`2026-08-25 02:00 -> 04:00`) : deux champs séparés porteraient le modal à six
   composants. `ends_at` est obligatoire côté Better Stack pour un

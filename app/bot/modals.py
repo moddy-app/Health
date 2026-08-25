@@ -127,8 +127,10 @@ class _StaffModal(ui.Modal):
 
     action = ""
 
-    def __init__(self, ctx) -> None:
-        super().__init__()
+    def __init__(self, ctx, *, title: str | None = None) -> None:
+        # Le titre reste celui de la classe sauf si l'appelant l'adapte — une
+        # même mécanique sert un incident et une maintenance.
+        super().__init__(**({"title": title} if title else {}))
         self._ctx = ctx
 
     def build_payload(self, interaction: discord.Interaction) -> dict | None:
@@ -243,8 +245,8 @@ class IncidentCreateModal(_StaffModal, title="Create Incident"):
 class IncidentUpdateModal(_StaffModal, title="Post an Update"):
     action = "incident.update"
 
-    def __init__(self, ctx) -> None:
-        super().__init__(ctx)
+    def __init__(self, ctx, *, maintenance: bool = False) -> None:
+        super().__init__(ctx, title="Update Maintenance" if maintenance else "Post an Update")
         self.message = ui.Label(
             text="Message",
             description="Public update, shown on the status page",
@@ -265,17 +267,29 @@ class IncidentUpdateModal(_StaffModal, title="Post an Update"):
 
 
 class IncidentResolveModal(_StaffModal, title="Resolve Incident"):
+    """Clôt l'incident actif, maintenance comprise.
+
+    Une maintenance se termine, elle ne « se résout » pas : seuls le titre, le
+    libellé et le message par défaut changent — `incident.resolve` ferme les
+    deux, et `IncidentManager.resolve` sait déjà refermer la fenêtre Better
+    Stack d'une maintenance close avant l'heure.
+    """
+
     action = "incident.resolve"
 
-    def __init__(self, ctx) -> None:
-        super().__init__(ctx)
+    def __init__(self, ctx, *, maintenance: bool = False) -> None:
+        super().__init__(ctx, title="Complete Maintenance" if maintenance else "Resolve Incident")
         self.message = ui.Label(
-            text="Resolution",
+            text="Completion note" if maintenance else "Resolution",
             description="Closing message, shown on the status page",
             component=ui.TextInput(
                 style=discord.TextStyle.paragraph,
                 max_length=1500,
-                default="This incident has been resolved.",
+                default=(
+                    "The scheduled maintenance has been completed."
+                    if maintenance
+                    else "This incident has been resolved."
+                ),
             ),
         )
         self.notify = _notify_label()

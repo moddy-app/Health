@@ -281,11 +281,38 @@ class IncidentManager:
                 notify_subscribers=notify,
                 report_type=_bs_report_type(incident),
             )
+            if incident.get("type") == TYPE_MAINTENANCE:
+                await self._close_bs_window(incident, report_id)
 
         incident = await self._notifier.dispatch(incident)
         await self._archive(incident)
         log.info("incident %s résolu", incident.get("id"))
         return incident
+
+    async def _close_bs_window(self, incident: dict, report_id: str) -> None:
+        """Ramène la fenêtre du report de maintenance à maintenant.
+
+        Un report de maintenance n'est pas clos par un update — il n'accepte
+        même pas `resolved`. C'est sa fenêtre qui parle : tant que `ends_at` est
+        dans le futur, la status page continue d'annoncer une maintenance que le
+        staff vient pourtant de clore ou d'annuler. Une maintenance annulée
+        avant d'avoir commencé voit ses deux bornes ramenées : une fenêtre ne
+        peut pas finir avant de commencer.
+        """
+        now = iso()
+        fields = {
+            field: now
+            for field in ("starts_at", "ends_at")
+            # `age_seconds` est négatif tant que la borne est à venir ; absente,
+            # il n'y a rien à refermer.
+            if (age_seconds(incident.get(field)) or 0) < 0
+        }
+        if not fields:
+            return
+        if await self._bs.patch_report(report_id, **fields):
+            log.info("fenêtre de maintenance %s refermée à %s", report_id, now)
+        else:
+            log.warning("fenêtre de maintenance %s non refermée côté Better Stack", report_id)
 
     # ------------------------------------------------------------------
     # Détection automatique

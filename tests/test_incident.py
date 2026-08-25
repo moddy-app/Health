@@ -268,6 +268,72 @@ async def test_a_finished_maintenance_gives_the_detection_back(manager, snapshot
     assert incident["type"] != TYPE_MAINTENANCE
 
 
+async def test_closing_a_maintenance_early_closes_its_window_too(
+    mapped_settings, store, notifier
+):
+    """Un report de maintenance n'est clos que par sa fenêtre.
+
+    Sans ce PATCH, une maintenance terminée — ou annulée — depuis Discord
+    continue d'être annoncée sur la status page jusqu'à l'heure prévue. Un
+    `resolved` n'y changerait rien : le report ne l'accepte pas.
+    """
+    bs = BetterStack(mapped_settings, store)
+    calls: list[tuple[str, str, dict | None]] = []
+
+    async def fake_request(method, path, payload=None):
+        calls.append((method, path, payload))
+        return {"data": {"id": "1032967", "relationships": {}}}
+
+    bs._request = fake_request
+    manager = IncidentManager(mapped_settings, store, bs, notifier)
+
+    await manager.handle_command(
+        "maintenance.create",
+        {
+            "title": "DNS Migration",
+            "message": "m",
+            "affected": ["moddy-api"],
+            "starts_at": iso(utcnow() + timedelta(hours=1)),
+            "ends_at": iso(utcnow() + timedelta(hours=2)),
+        },
+    )
+    await manager.handle_command("incident.resolve", {"message": "Cancelled.", "author": "Jules"})
+
+    patches = [payload for method, _, payload in calls if method == "PATCH"]
+    assert patches, "la fenêtre doit être refermée côté Better Stack"
+    # Annulée avant d'avoir commencé : une fenêtre ne peut pas finir avant de
+    # commencer, les deux bornes reviennent à maintenant.
+    assert set(patches[0]) == {"starts_at", "ends_at"}
+
+
+async def test_a_maintenance_whose_window_already_passed_is_not_patched(
+    mapped_settings, store, notifier
+):
+    """Rien à refermer : la fenêtre a fait son travail toute seule."""
+    bs = BetterStack(mapped_settings, store)
+    calls: list[str] = []
+
+    async def fake_request(method, path, payload=None):
+        calls.append(method)
+        return {"data": {"id": "1032967", "relationships": {}}}
+
+    bs._request = fake_request
+    manager = IncidentManager(mapped_settings, store, bs, notifier)
+
+    await manager.handle_command(
+        "maintenance.create",
+        {
+            "title": "DNS Migration",
+            "message": "m",
+            "affected": ["moddy-api"],
+            "starts_at": iso(utcnow() - timedelta(hours=2)),
+            "ends_at": iso(utcnow() - timedelta(hours=1)),
+        },
+    )
+    await manager.handle_command("incident.resolve", {"message": "Done.", "author": "Jules"})
+    assert "PATCH" not in calls
+
+
 async def test_history_is_capped(manager, store):
     for index in range(3):
         await store.rpush(keys.INCIDENT_HISTORY, f'{{"id":"inc_{index}"}}')

@@ -95,6 +95,11 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
   maintenance ouverte à l'avance, ou pas encore résolue après coup, ne doit pas
   la porter hors de sa fenêtre — et sans les deux bornes, impossible d'affirmer
   qu'on est « pendant » : elle reste alors masquée.
+- **La bannière publique annonce une maintenance en avance, mais au bon
+  temps.** `/status maintenance` rend l'incident actif dès sa création, même
+  programmée pour plus tard : le message dit `will undergo` avant `starts_at`,
+  `is/are undergoing` pendant, `underwent` après `ends_at` si elle traîne sans
+  être résolue. Voir `_maintenance_phase` dans `api/public.py`.
 - **`/status cancel` n'agit que sur une maintenance active.** `/status resolve`
   clôt n'importe quel incident : un `cancel` qui ferait pareil sur un incident
   ordinaire prêterait à confusion sur ce qui vient d'être clos.

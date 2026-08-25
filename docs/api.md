@@ -208,6 +208,16 @@ La borne de fin ne répète la date que si elle change de jour (`04:00` seul, ou
 `2026-08-26 01:00` si la fenêtre chevauche minuit). Sans les deux bornes,
 aucune fenêtre n'est mentionnée — une moitié de fenêtre serait pire que rien.
 
+Le verbe suit le moment : `/status maintenance` rend l'incident actif dès sa
+création, même programmée pour plus tard — la bannière prévient donc à
+l'avance, mais sans prétendre que la maintenance est déjà en cours.
+
+| Moment | Verbe |
+|---|---|
+| Avant `starts_at` | `will undergo scheduled maintenance` |
+| Entre `starts_at` et `ends_at` | `is`/`are undergoing scheduled maintenance` |
+| Après `ends_at` (non résolue) | `underwent scheduled maintenance` |
+
 ---
 
 ## `GET /health`

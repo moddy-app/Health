@@ -7,6 +7,8 @@ même si tout le reste rame.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, Response
 
 from .. import keys
@@ -74,8 +76,14 @@ def _banner_message(current: dict, service: str | None, settings: Settings) -> s
     verb = "is" if tailored else "are"
 
     if current.get("type") == "maintenance":
-        text = f"**{subject}** {verb} undergoing scheduled maintenance"
-        window = _format_window(current.get("starts_at"), current.get("ends_at"))
+        starts_at, ends_at = current.get("starts_at"), current.get("ends_at")
+        phase = _maintenance_phase(starts_at, ends_at)
+        verb_phrase = {
+            "upcoming": "will undergo scheduled maintenance",
+            "ended": "underwent scheduled maintenance",
+        }.get(phase, f"{verb} undergoing scheduled maintenance")
+        text = f"**{subject}** {verb_phrase}"
+        window = _format_window(starts_at, ends_at)
         text += f", {window}." if window else "."
     elif current.get("level") == colors.DEGRADED:
         text = f"**{subject}** {verb} experiencing degraded performance."
@@ -88,6 +96,24 @@ def _banner_message(current: dict, service: str | None, settings: Settings) -> s
     url = current.get("url") or settings.discord_status_page_url
     text += f" [View status]({url})"
     return text
+
+
+def _maintenance_phase(starts_at: str | None, ends_at: str | None) -> str | None:
+    """« upcoming », « ended », ou `None` (en cours, ou bornes inconnues).
+
+    `/status maintenance` rend l'incident actif dès sa création, même
+    programmée pour plus tard : sans cette distinction, la bannière annonçait
+    "is undergoing scheduled maintenance" avant que rien n'ait commencé.
+    """
+    start, end = parse_iso(starts_at), parse_iso(ends_at)
+    if start is None or end is None:
+        return None
+    now = datetime.now(tz=timezone.utc)
+    if now < start:
+        return "upcoming"
+    if now > end:
+        return "ended"
+    return None
 
 
 def _format_window(starts_at: str | None, ends_at: str | None) -> str | None:

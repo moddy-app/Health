@@ -148,14 +148,16 @@ async def test_banner_message_reflects_degraded_and_maintenance(client):
         affected=["moddy-api"],
         origin="discord",
         type_="maintenance",
-        starts_at="2026-08-25T02:00:00Z",
-        ends_at="2026-08-25T04:00:00Z",
+        # Encadre "maintenant" très largement : le test doit rester vrai
+        # quelle que soit la date d'exécution.
+        starts_at="2020-01-01T00:00:00Z",
+        ends_at="2099-01-01T00:00:00Z",
     )
     await ctx.store.delete(keys.STATUS_PUBLIC)
     body = client.get("/v1/status/banner?service=moddy-api").json()
     assert body["message"] == (
         "**API** is undergoing scheduled maintenance, "
-        "from 2026-08-25 02:00 to 04:00 UTC. [View status](https://status.moddy.app)"
+        "from 2020-01-01 00:00 to 2099-01-01 00:00 UTC. [View status](https://status.moddy.app)"
     )
 
 
@@ -168,14 +170,14 @@ async def test_banner_maintenance_window_spans_two_days(client):
         affected=["moddy-api"],
         origin="discord",
         type_="maintenance",
-        starts_at="2026-08-25T23:00:00Z",
-        ends_at="2026-08-26T01:00:00Z",
+        starts_at="2020-01-01T23:00:00Z",
+        ends_at="2020-01-02T01:00:00Z",
     )
     await ctx.store.delete(keys.STATUS_PUBLIC)
     body = client.get("/v1/status/banner").json()
     assert body["message"] == (
-        "**Some Moddy services** are undergoing scheduled maintenance, "
-        "from 2026-08-25 23:00 to 2026-08-26 01:00 UTC. [View status](https://status.moddy.app)"
+        "**Some Moddy services** underwent scheduled maintenance, "
+        "from 2020-01-01 23:00 to 2020-01-02 01:00 UTC. [View status](https://status.moddy.app)"
     )
 
 
@@ -195,6 +197,49 @@ async def test_banner_maintenance_without_a_window_says_nothing_about_it(client)
     assert body["message"] == (
         "**Some Moddy services** are undergoing scheduled maintenance. "
         "[View status](https://status.moddy.app)"
+    )
+
+
+async def test_banner_announces_an_upcoming_maintenance_ahead_of_time(client):
+    """`/status maintenance` rend l'incident actif dès sa création, même
+    programmée pour plus tard : le message ne doit pas prétendre qu'elle est
+    déjà en cours."""
+    ctx = client.app.state.ctx
+    await ctx.incidents.open(
+        title="Maintenance",
+        message="m",
+        level="maintenance",
+        affected=["moddy-api"],
+        origin="discord",
+        type_="maintenance",
+        starts_at="2099-01-01T02:00:00Z",
+        ends_at="2099-01-01T04:00:00Z",
+    )
+    await ctx.store.delete(keys.STATUS_PUBLIC)
+    body = client.get("/v1/status/banner?service=moddy-api").json()
+    assert body["message"] == (
+        "**API** will undergo scheduled maintenance, "
+        "from 2099-01-01 02:00 to 04:00 UTC. [View status](https://status.moddy.app)"
+    )
+
+
+async def test_banner_reports_a_maintenance_left_unresolved_past_its_window(client):
+    ctx = client.app.state.ctx
+    await ctx.incidents.open(
+        title="Maintenance",
+        message="m",
+        level="maintenance",
+        affected=["moddy-api"],
+        origin="discord",
+        type_="maintenance",
+        starts_at="2020-01-01T02:00:00Z",
+        ends_at="2020-01-01T04:00:00Z",
+    )
+    await ctx.store.delete(keys.STATUS_PUBLIC)
+    body = client.get("/v1/status/banner?service=moddy-api").json()
+    assert body["message"] == (
+        "**API** underwent scheduled maintenance, "
+        "from 2020-01-01 02:00 to 04:00 UTC. [View status](https://status.moddy.app)"
     )
 
 

@@ -95,14 +95,26 @@ class Settings(BaseSettings):
     hm_bs_webhook_silence_alert: int = 86_400
 
     # --- Discord ---
-    discord_webhook_url: str = ""
-    discord_status_channel_id: str = ""
+    # Application dédiée : token distinct de celui du bot Moddy, pour que le
+    # monitor reste capable de parler quand Moddy est down.
+    discord_token: str = ""
     discord_guild_id: str = ""
+    discord_status_channel_id: str = ""
+    discord_staff_role_id: str = ""
+    # Créé à la main dans le salon, jamais par cette application : si l'app est
+    # suspendue, le webhook doit lui survivre.
+    discord_webhook_url: str = ""
     discord_status_page_url: str = "https://status.moddy.app"
-    # Délai d'ACK du bot avant bascule sur le webhook.
-    discord_bot_ack_timeout: float = 5.0
-    # Rafraîchissement périodique du sticky message.
-    discord_sticky_interval: int = 120
+    # Délai au-delà duquel on considère que le bot n'a pas pris et on bascule
+    # sur le webhook.
+    hm_bot_ack_timeout: float = 5.0
+    hm_sticky_enabled: bool = True
+    # Secondes d'attente avant repost, après un message tiers dans le salon.
+    hm_sticky_debounce: int = 5
+    # Rafraîchissement passif du contenu du sticky.
+    hm_sticky_refresh_interval: int = 120
+    # Anti-spam du bouton « Refresh », par utilisateur.
+    hm_refresh_cooldown: int = 5
 
     # --- API publique ---
     hm_public_rate_limit: str = "60/minute"
@@ -175,6 +187,10 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return _csv(self.hm_cors_origins)
+
+    @property
+    def bot_enabled(self) -> bool:
+        return bool(self.discord_token and self.discord_status_channel_id)
 
     @property
     def betterstack_enabled(self) -> bool:

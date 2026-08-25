@@ -1,10 +1,45 @@
-# Notification Discord
+# Bot et notification Discord
+
+Le client Discord vit **dans le même process** que le monitor : le serveur
+FastAPI, les boucles du scheduler et le client discord.py tournent dans la même
+event loop asyncio. Ce n'est pas un service séparé, et ce n'est plus le bot
+Moddy.
+
+## Pourquoi une application dédiée
+
+Le monitor doit rester capable de communiquer quand Moddy est down —
+précisément le cas où on en a besoin. `Moddy Health Monitor` est donc une
+application Discord distincte : son propre token, sa propre connexion gateway,
+ses propres pannes. Le sticky, le bouton `Refresh` et les commandes `/status`
+restent fonctionnels pendant une panne complète de Moddy.
+
+## Lancement
+
+```python
+config = uvicorn.Config(app, host="0.0.0.0", port=settings.port,
+                        log_config=None, lifespan="on")
+await asyncio.gather(uvicorn.Server(config).serve(), run_bot(bot, token))
+```
+
+- `uvicorn.Server.serve()`, **pas** `uvicorn.run()` : ce dernier crée sa propre
+  event loop et le bot n'aurait plus où tourner.
+- `async with bot` (dans `bot.client.run`) ferme proprement la session HTTP de
+  discord.py sur SIGTERM. Railway redéploie souvent, une gateway mal fermée
+  laisse un shard fantôme quelques minutes.
+- `run_bot` avale toute exception : un token invalide ne doit pas empêcher la
+  détection, l'alerte par webhook et `/v1/status` de fonctionner.
+
+### Intents
+
+`guilds` et `guild_messages`. Pas de `message_content` : le sticky ne lit jamais
+le contenu d'un message, seulement son ID et son salon — inutile de demander un
+intent privilégié.
 
 ## Chaîne de redondance
 
 ```
-1. Bot Moddy (pubsub Redis `moddy:hm:notify`)
-       │ échec de publication, ou pas d'ACK sous 5s
+1. Bot Health Monitor (discord.py, même process)
+       │ gateway perdue, salon injoignable, ou envoi au-delà de HM_BOT_ACK_TIMEOUT
        ▼
 2. Webhook Discord direct (HTTP depuis le monitor)
        │ échec (Discord down, webhook non configuré)
@@ -12,23 +47,35 @@
 3. File de rattrapage `hm:notify:queue` + log ERROR
 ```
 
-Le niveau 1 est préféré : le bot peut éditer ses propres messages, gérer le
-sticky et les interactions. Le niveau 2 garantit que **si le bot est mort,
-l'alerte part quand même** — précisément le cas où on en a le plus besoin.
+Le niveau 1 est préféré : le bot édite ses propres messages et porte les
+interactions. Le niveau 2 garantit que **si l'application est suspendue ou la
+gateway perdue, l'alerte part quand même**.
+
+**Le webhook de repli doit être créé à la main** depuis les paramètres du salon,
+et surtout pas par l'application Health Monitor : si son token est compromis ou
+l'app suspendue, les deux canaux tomberaient ensemble et la redondance ne
+servirait à rien.
 
 `Notifier.deliver()` renvoie un booléen ; `dispatch()` empile dans la file si la
 livraison a échoué. Cette séparation est nécessaire : un incident qui porte déjà
 un `discord_message_id` d'un envoi précédent ne doit pas être compté comme livré
 sur la base de ce champ.
 
-### ACK du bot
+### Le transport est collant
 
-Le monitor publie sur `moddy:hm:notify` un message portant un `nonce`. Le bot
-répond sur `moddy:hm:notify:ack` avec `{"nonce": ..., "message_id": ...}`. Un ACK
-sans `nonce` est accepté et sert la plus ancienne attente en cours (tolérance aux
-relais simplifiés).
+`discord_transport` est stocké à côté de `discord_message_id`, et respecté à
+chaque édition. C'est l'erreur la plus facile à commettre ici.
 
-Sans ACK sous `DISCORD_BOT_ACK_TIMEOUT` (5s), bascule webhook.
+| Transport d'origine | Nouvelle version |
+|---|---|
+| `bot` | Le bot `fetch_message` puis `edit` |
+| `webhook` | `PATCH /webhooks/{id}/{token}/messages/{message_id}` |
+| `bot`, bot désormais muet | Le webhook ne peut pas éditer le message d'un autre auteur → **nouveau** message |
+| `webhook`, webhook désormais mort | Le bot poste un **nouveau** message plutôt que de perdre l'information |
+
+Tant que le webhook répond, le bot ne touche pas à un fil qui lui appartient :
+il n'en ferait qu'un doublon. Un `404` sur l'édition (message supprimé à la
+main) déclenche aussi un repost.
 
 ### Idempotence
 
@@ -36,34 +83,57 @@ Clé de déduplication : `sha1(incident_id + nombre d'updates + canal)`, stocké
 dans `hm:notify:sent`.
 
 La vérification est faite **tous canaux confondus** avant d'essayer quoi que ce
-soit : une version donnée d'un incident ne part qu'une fois. Sans ça, un incident
-déjà relayé par le bot repartait une seconde fois par webhook au premier retry —
-deux messages pour un seul événement.
+soit : une version donnée d'un incident ne part qu'une fois. Sans ça, un
+incident déjà posté par le bot repartait une seconde fois par webhook au premier
+retry — deux messages pour un seul événement.
 
 ### File de rattrapage
 
-`hm:notify:queue`, liste Redis, plafonnée à 200 entrées. Vidée toutes les 30s par
-la boucle `notify-queue`, **dans l'ordre** : un message qui échoue est remis en
-tête (`lpush`) et le drain s'arrête là. Le rejouer plus tard dans le désordre
+`hm:notify:queue`, liste Redis, plafonnée à 200 entrées. Vidée toutes les 30s
+par la boucle `notify-queue`, **dans l'ordre** : un message qui échoue est remis
+en tête (`lpush`) et le drain s'arrête là. Le rejouer plus tard dans le désordre
 donnerait un fil d'incident incohérent.
 
-Chaque entrée conserve son `queued_at` d'origine.
+## Un modèle, deux rendus
 
-### Édition
+Le bot et le webhook envoient le même message par deux APIs incompatibles :
+discord.py veut des objets `ui.*`, le webhook veut du JSON brut. Écrire deux
+fois la mise en forme est la garantie qu'elles divergeront.
 
-| Transport d'origine | Nouvelle version |
+```
+render/model.py    IncidentPresentation — le modèle commun
+render/theme.py    couleurs, icônes, libellés
+render/layout.py   -> discord.ui.LayoutView   (chemin bot)
+render/raw.py      -> JSON brut               (chemin webhook)
+```
+
+`tests/test_render_parity.py` compare les deux sorties sur le même modèle, pour
+chaque cas de bord (résolu, sans URL, sans update, maintenance). C'est dix
+lignes qui empêchent les deux chemins de dériver.
+
+`render/layout.py` porte aussi `BaseView`, le socle de toutes les vues :
+`timeout=None` et un handler d'erreurs central. Sans lui, une exception dans un
+callback laisse l'interaction sans réponse et affiche « L'application ne répond
+pas » au staff en pleine crise.
+
+### Sobriété du rendu
+
+Tout message du bot est un message **Components V2** — jamais de contenu texte
+nu, jamais d'embed (sauf le repli webhook). Les réponses éphémères des commandes
+elles-mêmes passent par `build_notice_view`.
+
+Trois icônes, pas une de plus :
+
+| Icône | Usage |
 |---|---|
-| `bot` | `incident.edit` publié sur le bus |
-| `webhook` | `PATCH /webhooks/{id}/{token}/messages/{message_id}` |
-| `bot`, mais bot désormais muet | Le webhook ne peut pas éditer le message d'un autre auteur → **nouveau** message |
+| `<:check_circle:1541616428657016926>` | résolu, service opérationnel |
+| `<:error:1541616427197530203>` | incident en cours, service down |
+| `<a:spinner:1541617132104843264>` | maintenance, service dégradé, état inconnu |
 
-Un `404` sur l'édition (message supprimé à la main) déclenche aussi un repost.
-
-## Format du message
-
-Le monitor construit le **JSON brut** des Components V2. Le bot le relaie tel
-quel, le webhook l'envoie directement : une seule fonction de rendu
-(`render/components.py`), deux transports.
+Ils doivent être uploadés en **application emojis** sur l'application Health
+Monitor, via le portail développeur. C'est la seule option qui garantisse un
+rendu correct dans les deux chemins d'envoi : un émoji appartenant à un serveur
+que l'application ne connaît pas s'affiche cassé côté webhook.
 
 ### Container 1 — en-tête
 
@@ -80,18 +150,18 @@ bouton lien.
       "accessory": { "type": 2, "style": 5, "label": "View Incident",
                      "url": "https://status.moddy.app/en/incident/995593" },
       "components": [
-        { "type": 10, "content": "### <:error_circle_white:...> Major Outage – Bot & API Unavailable" }
+        { "type": 10, "content": "### <:error:...> Major Outage – Bot & API Unavailable" }
       ]
     },
     { "type": 10,
-      "content": "**Created by:** Moddy Health Monitor\n**Affected services:** ``Moddy Bot``, ``API``\n**Status:** <:verified2:...>Resolved" }
+      "content": "**Created by:** Moddy Health Monitor\n**Affected services:** ``Moddy Bot``, ``API``\n**Status:** <:check_circle:...>Resolved" }
   ]
 }
 ```
 
 Sans URL — incident `degraded`, ou Better Stack injoignable — la Section est
-remplacée par un simple TextDisplay : l'API Discord refuse une Section sans
-`accessory`.
+remplacée par un simple TextDisplay : l'API refuse une Section sans `accessory`,
+et un bouton lien avec une URL vide lève à l'envoi.
 
 ### Container 2 — historique
 
@@ -106,7 +176,9 @@ remplacée par un simple TextDisplay : l'API Discord refuse une Section sans
 ]}
 ```
 
-Toujours `<t:unix:F>` : Discord affiche la date dans le fuseau de chaque lecteur.
+Toujours `<t:unix:F>` : chaque lecteur voit la date dans son propre fuseau.
+C'est aussi ce qui évite le décalage subi par la status page, réglée sur
+`America/Adak`.
 
 Un message Discord plafonne à 40 composants ; seuls les **15 derniers** updates
 sont rendus, précédés d'une ligne `-# N earlier update(s) not shown.` le cas
@@ -121,11 +193,9 @@ chaque ligne), sans quoi seule la première ligne serait citée.
 | `accent_color` dégradé | `15774258` (`#F0B232`) |
 | `accent_color` maintenance | `5793266` (`#5865F2`) |
 | `accent_color` résolu | `5763719` (`#57F287`) |
-| Emoji en cours | `<:error_circle_white:1534635025629319419>` |
-| Emoji résolu | `<:verified2:1495440135163084870>` |
 
-Le statut affiché a deux valeurs, comme les deux emojis : `Ongoing` et
-`Resolved` (`Maintenance` pour ce type d'incident).
+Le statut affiché a trois valeurs : `Ongoing`, `Resolved`, et `Maintenance` pour
+ce type d'incident tant qu'il n'est pas clos.
 
 ## Envoi par webhook
 
@@ -138,8 +208,8 @@ POST {WEBHOOK_URL}?wait=true&with_components=true
 
 **Repli dégradé :** si le webhook renvoie `400` sur ce format, `components_v2`
 passe à `False` pour la durée du process et tout repart en embed classique
-(`build_incident_embed`). Titre, description, services affectés, statut et
-dernier update y survivent ; l'historique complet et le bouton, non.
+(`build_raw_embed`). Titre, description, services affectés, statut et dernier
+update y survivent ; l'historique complet et le bouton, non.
 
 Ce maillon reste **le seul non validé contre le vrai Discord** : il demande une
 URL de webhook réelle. C'est le premier test à faire au déploiement.
@@ -149,32 +219,100 @@ sur 5xx.
 
 ## Sticky message
 
-Le sticky appartient au **bot** (`views/status_sticky.py` côté bot). Le monitor
-ne fait que publier un signal :
+Un message permanent en bas du salon, avec une ligne par service :
 
-```json
-{ "action": "sticky.refresh",
-  "payload": { "channel_id": "...", "status": { ...réponse /v1/status... } } }
+```
+### <:check_circle:...> All Systems Operational
+-# Last updated <t:1787000000:R>
+
+<:check_circle:...> ``Moddy Bot``  Operational
+<:check_circle:...> ``API      ``  Operational
+──────────────────────────
+[ Refresh ]  [ Status Page ]
 ```
 
-Envoyé toutes les 2 minutes (`DISCORD_STICKY_INTERVAL`) et **immédiatement** dès
-que le niveau global change.
+Trois déclencheurs le font bouger, et ils peuvent tomber ensemble :
 
-Reste à faire côté bot : écoute `on_message` avec debounce 5s, repost quand le
-sticky n'est plus le dernier message, persistance de l'ID dans
-`hm:sticky:message_id`, et View persistante `custom_id: hm:sticky:refresh`
-enregistrée au démarrage via `register_persistent` — sinon le bouton est mort
-après chaque redéploiement.
+| Déclencheur | Effet |
+|---|---|
+| Message d'un tiers dans le salon | Repost après `HM_STICKY_DEBOUNCE` |
+| Rafraîchissement passif (`HM_STICKY_REFRESH_INTERVAL`) | **Édition**, pas repost |
+| Changement du niveau global (boucle `check`) | Édition immédiate |
+| `/status sticky` | Repost forcé |
 
-La réponse éphémère du bouton lit `hm:status:public` et `hm:hb:{service}`
-directement dans Redis : pas d'appel HTTP interne, ça doit répondre même en
-pleine crise.
+- **Debounce.** Sans lui, une rafale de dix messages produit dix reposts et un
+  rate limit Discord immédiat.
+- **Verrou asyncio.** Les trois déclencheurs peuvent arriver en même temps ;
+  sans verrou, on se retrouve avec plusieurs stickys en double.
+- **Supprimer l'ancien avant de poster le nouveau**, en tolérant son absence.
+- **Persister l'ID** dans `hm:sticky:message_id`. Au démarrage, `fetch_message` :
+  si le message existe encore, on l'édite. Sinon chaque redéploiement laisse un
+  cadavre dans le salon.
 
-## Canal de commande
+## Bouton Refresh
 
-Le bot ne parle jamais à Better Stack. Il publie sur `moddy:hm:command`, le
-monitor consomme et exécute. Toute la logique d'incident reste en un seul
-endroit, et le token Better Stack n'existe que dans le monitor.
+Vue persistante, `custom_id` fixe `hm:sticky:refresh`, réenregistrée au
+démarrage par `add_view` dans `setup_hook`. Sans ça le bouton est mort après
+chaque redéploiement — et Railway redéploie souvent.
 
-Si Redis est down, le bot bascule sur `POST /ingest/command` avec le
-`X-Health-Token` : même contrat, autre transport.
+Sa réponse est **éphémère et plus détaillée que le sticky** : version, uptime,
+âge du dernier heartbeat, contenu de `checks`, services impactés par ricochet.
+C'est l'outil de diagnostic rapide pendant une crise.
+
+Elle lit `hm:status:public` et `hm:hb:{service}` **directement dans Redis**,
+jamais par un appel HTTP à `/v1/status` : viser son propre process ajouterait un
+point de panne pour rien.
+
+`HM_REFRESH_COOLDOWN` (5s par utilisateur) — sans ça, le bouton est un vecteur
+de spam sur un salon public.
+
+## Commandes
+
+Groupe `/status`, synchronisé sur la guild uniquement : le sync global met
+jusqu'à une heure à se propager, celui d'une guild est instantané.
+
+| Commande | Effet |
+|---|---|
+| `/status incident` | Modal de création |
+| `/status update` | Modal d'update sur l'incident actif |
+| `/status resolve` | Modal de résolution |
+| `/status maintenance` | Modal de maintenance planifiée |
+| `/status check` | État détaillé (éphémère) |
+| `/status sticky` | Force le repost du sticky |
+
+Le bot ne parle jamais à Better Stack : il appelle
+`IncidentManager.handle_command`, dans ce process. Toute la logique d'incident
+reste en un seul endroit, et le token Better Stack n'existe que côté monitor.
+
+### Permissions
+
+`DISCORD_STAFF_ROLE_ID` dans la guild `DISCORD_GUILD_ID`. Sans rôle configuré,
+le repli est la permission `manage_guild` — jamais l'ouverture à tout le
+serveur. Un `on_error` sur le `CommandTree` répond au refus : une check qui lève
+sans réponse laisse l'interaction en échec visible.
+
+### Modals V2
+
+| Point | Règle |
+|---|---|
+| Composants top-level | 5 maximum, chacun `Label` ou `TextDisplay` |
+| `TextInput.label` | Déprécié — le texte affiché vient de `Label.text` |
+| `disabled` | **Interdit** dans un modal, erreur API |
+| Lecture des valeurs | `.component.value` / `.component.values` |
+| `row` | Peu fiable en V2, l'ordre suit la déclaration |
+| `RadioGroup`, `CheckboxGroup` | discord.py ≥ 2.7 |
+| Décorateurs | `@ui.label` n'existe pas — attributs ou `add_item` |
+
+- **`defer(ephemeral=True, thinking=True)` est obligatoire.** Créer un incident
+  appelle Better Stack *et* publie sur Discord : ça dépasse facilement la
+  fenêtre de 3 secondes d'une interaction.
+- **La liste des services affectés vient de `known_services`**, jamais d'une
+  liste en dur : ajouter un service reste une affaire de variables
+  d'environnement (invariant §6). `CheckboxGroup` plafonne à 10 options.
+- **`update` et `resolve` vérifient l'incident actif *avant* d'ouvrir le
+  modal** : `send_modal` ne peut pas être annulé une fois envoyé. L'incident
+  concerné vient de `hm:incident:active`, il n'est jamais demandé au staff.
+- **La fenêtre de maintenance tient en un seul champ**
+  (`2026-08-25 02:00 -> 04:00`) : deux champs séparés porteraient le modal à six
+  composants. `ends_at` est obligatoire côté Better Stack pour un
+  `report_type: "maintenance"`.

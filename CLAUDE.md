@@ -6,8 +6,8 @@ Repère pour travailler sur ce dépôt. La documentation détaillée est dans
 ## Le projet
 
 `moddy-health-monitor` : service de monitoring interne de l'écosystème Moddy.
-FastAPI, headless, déployé sur Railway. Les services Moddy **poussent** leur état
-toutes les 20s. Seuls ceux qui n'ont aucun process pour le faire — un dashboard
+FastAPI **et un bot Discord dédié dans le même process**, déployé sur Railway.
+Les services Moddy **poussent** leur état toutes les 20s. Seuls ceux qui n'ont aucun process pour le faire — un dashboard
 est un site statique — sont sondés en HTTP (`HM_PROBE_MAP`). Il détecte les
 pannes, alerte sur Discord, publie sur la status page Better Stack, et sert un
 JSON public au dashboard.
@@ -15,8 +15,9 @@ JSON public au dashboard.
 ## Commandes
 
 ```bash
-uvicorn app.main:app --reload --port 8080    # lancer (REDIS_URL vide = mémoire seule)
-pytest                                        # 103 tests, ~3s
+python -m app.main                            # lancer (API + bot ; REDIS_URL vide = mémoire seule)
+uvicorn app.main:app --reload --port 8080     # API seule, sans bot
+pytest                                        # 144 tests, ~3s
 python -m pyflakes app examples tests         # lint
 ```
 
@@ -26,24 +27,26 @@ Toujours faire tourner `pytest` **et** `pyflakes` avant de commiter.
 
 ```
 app/
-├── main.py        FastAPI, CORS, rate limit, lifespan
+├── main.py        FastAPI, CORS, rate limit, lifespan, gather serveur + bot
 ├── context.py     Câblage — un objet Context porte tout, posé sur app.state.ctx
 ├── config.py      Settings pydantic ; les listes sont du CSV, pas du JSON
 ├── keys.py        Noms des clés Redis — jamais de nom en dur ailleurs
 ├── state.py       Store Redis + miroir mémoire ; ne lève jamais
 ├── api/           ingest, webhooks, public, health
 ├── core/          detector, impact, incident, notifier, probe, scheduler
-├── integrations/  betterstack, discord_webhook, redis_bus
-└── render/        components (Components V2), colors
+├── bot/           client, publisher, sticky, views, modals, commands
+├── integrations/  betterstack, discord_webhook
+└── render/        model, theme, layout (bot), raw (webhook), colors
 ```
 
 Point d'entrée de la logique : `core/scheduler.py::_check_step` — détection,
-réconciliation, calcul de `/v1/status`, signal sticky.
+réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
 
 ## Invariants à ne pas casser
 
 1. **Le monitor ne dépend de rien de ce qu'il surveille.** Pas de PostgreSQL, pas
-   d'appel vers l'API Moddy, aucun import du code du bot. La sonde de
+   d'appel vers l'API Moddy, aucun import du code du bot Moddy — le bot de ce
+   dépôt est une application Discord distincte, qui ne surveille rien. La sonde de
    `core/probe.py` ne fait exception qu'en apparence : elle `GET` une URL
    publique, comme un navigateur, et son échec n'écrit qu'un `down`.
 2. **Aucune exception ne remonte jusqu'à une boucle.** `core/scheduler.py`
@@ -56,6 +59,16 @@ réconciliation, calcul de `/v1/status`, signal sticky.
    jamais interprété. Ajouter un service = ajouter des variables d'environnement,
    pas du code.
 7. **Une version d'incident ne part qu'une fois**, tous canaux Discord confondus.
+8. **Le transport est collant.** Un message posté par webhook n'est pas éditable
+   par le bot, et inversement : `discord_transport` est stocké à côté de
+   `discord_message_id` et respecté à chaque édition.
+9. **Le bot ne bloque jamais le reste.** Gateway perdue, token invalide, salon
+   injoignable : le monitor continue de détecter, d'alerter par webhook et de
+   servir `/v1/status`. `bot/client.py::run` avale tout.
+10. **Un seul modèle de rendu, deux renderers.** Toucher `render/layout.py` sans
+    toucher `render/raw.py` fait échouer `test_render_parity.py` — c'est le but.
+11. **Trois icônes, pas une de plus**, et tout message du bot est en
+    Components V2 — jamais de texte nu, jamais d'embed hors repli webhook.
 
 ## Pièges déjà rencontrés
 
@@ -65,7 +78,17 @@ réconciliation, calcul de `/v1/status`, signal sticky.
 - **La file de rattrapage se remet en tête** (`lpush`), pas en queue : l'ordre
   des messages d'un incident doit être préservé.
 - **Le webhook ne peut pas éditer un message posté par le bot.** L'échec
-  d'édition déclenche un repost, pas une perte.
+  d'édition déclenche un repost, pas une perte. Réciproquement, tant que le
+  webhook répond, le bot ne touche pas à un fil qui lui appartient.
+- **`send_modal` ne s'annule pas.** `/status update` et `/status resolve`
+  vérifient l'incident actif *avant* d'ouvrir le modal.
+- **Une vue persistante sans `add_view` est morte au redéploiement**, et Railway
+  redéploie souvent. Le bouton `Refresh` est réenregistré dans `setup_hook`.
+- **Le sticky sans debounce prend un rate limit**, sans verrou fait des
+  doublons.
+- **Les émojis doivent appartenir à l'application** (application emojis), sinon
+  le rendu casse dans le chemin webhook.
+- **`tree.sync()` global met jusqu'à une heure** à se propager : sync guild.
 - **`status.moddy.app/index.json` renvoie un 302** vers `/en/index.json` : le
   client HTTP doit suivre les redirections.
 - **Better Stack : `ends_at` reste `null` même sur un report résolu**, et
@@ -89,7 +112,7 @@ réconciliation, calcul de `/v1/status`, signal sticky.
 
 ## Branche et livraison
 
-Développer sur `claude/dashboard-monitoring-duap2w`. Ne pas ouvrir de pull
+Développer sur `claude/discord-bot-health-monitor-z71zme`. Ne pas ouvrir de pull
 request sans demande explicite.
 
 ## Où chercher
@@ -100,7 +123,7 @@ request sans demande explicite.
 | Contrat d'ingestion | [docs/heartbeat.md](docs/heartbeat.md) |
 | Seuils, propagation d'impact, sévérité | [docs/detection.md](docs/detection.md) |
 | Cycle de vie d'un incident | [docs/incidents.md](docs/incidents.md) |
-| Rendu et redondance Discord | [docs/discord.md](docs/discord.md) |
+| Bot, rendu et redondance Discord | [docs/discord.md](docs/discord.md) |
 | API v2, anti-boucle, poll | [docs/betterstack.md](docs/betterstack.md) |
 | Référence HTTP | [docs/api.md](docs/api.md) |
 | Variables d'environnement | [docs/configuration.md](docs/configuration.md) |
@@ -111,16 +134,16 @@ request sans demande explicite.
 
 ## Reste à faire
 
-Côté **bot Moddy**, dans son propre dépôt : listener Redis + ACK, sticky message
-et bouton `Refresh` persistant, commandes `/status *` et Modals V2. Le monitor
-publie déjà tout ce dont le bot a besoin.
+Le bot Discord est complet : publication, sticky, bouton `Refresh` persistant,
+commandes `/status *` et Modals V2. Il n'y a plus rien à faire côté bot Moddy —
+le pubsub Redis qui les reliait a été retiré.
 
-Côté monitor : `BetterStack.poll_index()` parse les `status_page_resource` dans
+`BetterStack.poll_index()` parse les `status_page_resource` dans
 `snapshot.resources`, mais `reconcile_betterstack()` n'en fait rien — l'état des
 monitors Better Stack n'alimente donc pas `/v1/status`. Sans conséquence pour le
 dashboard, qui a sa propre sonde, mais l'écart reste ouvert pour les ressources
 qui n'en ont pas.
 
-L'envoi Components V2 par webhook n'a jamais été confronté au vrai
-Discord — c'est le premier test à faire au déploiement, avec le repli embed en
-filet.
+Rien du chemin Discord n'a été confronté au vrai Discord : ni la gateway, ni les
+Modals V2, ni l'envoi Components V2 par webhook. C'est le premier test à faire
+au déploiement, avec le repli embed en filet.

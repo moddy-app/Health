@@ -120,11 +120,6 @@ def test_betterstack_webhook_rejects_a_bad_key(client):
         client.app.state.ctx.settings.betterstack_webhook_secret = ""
 
 
-def test_command_endpoint_is_the_bot_fallback(client):
-    response = client.post(
-        "/ingest/command",
-        json={"action": "incident.resolve", "payload": {"message": "done", "author": "Jules"}},
-        headers=TOKEN,
-    )
-    assert response.status_code == 200
-    assert response.json() == {"ok": True, "action": "incident.resolve"}
+def test_the_bot_no_longer_has_an_http_command_route(client):
+    """Le bot vit dans ce process : il appelle `handle_command` directement."""
+    assert client.post("/ingest/command", json={}, headers=TOKEN).status_code == 404

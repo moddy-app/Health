@@ -92,8 +92,35 @@ def create_app() -> FastAPI:
 app = create_app()
 
 
-if __name__ == "__main__":  # pragma: no cover
+async def serve() -> None:  # pragma: no cover - chemin de production
+    """FastAPI et le bot dans la même event loop, côte à côte.
+
+    `uvicorn.Server.serve()` et non `uvicorn.run()` : ce dernier crée sa propre
+    event loop et le bot n'aurait plus où tourner. Le `async with bot` de
+    `bot.run` garantit la fermeture propre de la session HTTP de discord.py sur
+    SIGTERM — une gateway mal fermée laisse un shard fantôme quelques minutes,
+    et Railway redéploie souvent.
+    """
+    import asyncio
+
     import uvicorn
 
+    from .bot.client import run as run_bot
+
     settings = get_settings()
-    uvicorn.run(app, host="0.0.0.0", port=settings.port, log_config=None)
+    config = uvicorn.Config(
+        app, host="0.0.0.0", port=settings.port, log_config=None, lifespan="on"
+    )
+    server = uvicorn.Server(config)
+
+    bot = app.state.ctx.bot
+    if bot is None:
+        await server.serve()
+        return
+    await asyncio.gather(server.serve(), run_bot(bot, settings.discord_token))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import asyncio
+
+    asyncio.run(serve())

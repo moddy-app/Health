@@ -14,11 +14,16 @@ Pour un service qui alerte réellement :
 ```env
 HM_INGEST_TOKEN=<secret partagé avec les services>
 HM_SERVICES=moddy-bot,moddy-api,moddy-altguard,moddy-feeds
+DISCORD_TOKEN=<token de l'application Health Monitor>
+DISCORD_GUILD_ID=1394001780148535387
+DISCORD_STATUS_CHANNEL_ID=1398625686301704323
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
 ```
 
-Sans `HM_INGEST_TOKEN`, l'ingestion répond 503. Sans `DISCORD_WEBHOOK_URL` ni
-Redis, aucune alerte ne peut partir : tout finit dans la file de rattrapage.
+Sans `HM_INGEST_TOKEN`, l'ingestion répond 503. Sans `DISCORD_TOKEN`, le bot
+n'est pas construit et tout passe par le webhook — le monitor reste
+parfaitement fonctionnel, il perd le sticky et les commandes. Sans les deux,
+aucune alerte ne peut partir : tout finit dans la file de rattrapage.
 
 ## Serveur
 
@@ -120,12 +125,24 @@ parfaitement fonctionnel sur Discord seul.
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `DISCORD_WEBHOOK_URL` | — | Second maillon de la redondance |
+| `DISCORD_TOKEN` | — | Token de l'**application dédiée** Health Monitor, jamais celui de Moddy. Vide ⇒ bot désactivé |
+| `DISCORD_GUILD_ID` | — | Serveur ; les commandes y sont synchronisées, et les `/status` refusées ailleurs |
 | `DISCORD_STATUS_CHANNEL_ID` | — | Salon du sticky et des incidents |
-| `DISCORD_GUILD_ID` | — | Serveur, transmis au bot |
-| `DISCORD_STATUS_PAGE_URL` | `https://status.moddy.app` | Base des URLs d'incident reconstruites |
-| `DISCORD_BOT_ACK_TIMEOUT` | `5` | Secondes d'attente de l'ACK avant bascule webhook |
-| `DISCORD_STICKY_INTERVAL` | `120` | Période de rafraîchissement du sticky |
+| `DISCORD_STAFF_ROLE_ID` | — | Rôle autorisé sur `/status *`. Vide ⇒ repli sur la permission `manage_guild` |
+| `DISCORD_WEBHOOK_URL` | — | Second maillon de la redondance, **créé à la main** dans le salon |
+| `DISCORD_STATUS_PAGE_URL` | `https://status.moddy.app` | Base des URLs d'incident reconstruites, et bouton du sticky |
+| `HM_BOT_ACK_TIMEOUT` | `5` | Secondes avant de considérer que le bot n'a pas pris et de basculer webhook |
+| `HM_STICKY_ENABLED` | `true` | Poster et maintenir le sticky |
+| `HM_STICKY_DEBOUNCE` | `5` | Secondes avant repost, après un message tiers dans le salon |
+| `HM_STICKY_REFRESH_INTERVAL` | `120` | Période de rafraîchissement passif du sticky |
+| `HM_REFRESH_COOLDOWN` | `5` | Anti-spam du bouton `Refresh`, par utilisateur |
+
+Le bot n'est construit que si `DISCORD_TOKEN` **et** `DISCORD_STATUS_CHANNEL_ID`
+sont renseignés (`Settings.bot_enabled`).
+
+**Ne pas créer `DISCORD_WEBHOOK_URL` depuis l'application Health Monitor.** Si
+son token est compromis ou l'application suspendue, les deux canaux tomberaient
+ensemble et la redondance ne servirait à rien.
 
 ## API publique
 

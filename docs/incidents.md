@@ -29,7 +29,7 @@ DÉTECTION (auto)          COMMANDE (staff)          BETTER STACK
 | `origin` | Déclencheur | Entrée |
 |---|---|---|
 | `auto` | `reconcile()` sur un snapshot | Boucle de check |
-| `discord` | `/status *` du staff | Pubsub `moddy:hm:command` ou `POST /ingest/command` |
+| `discord` | `/status *` du staff | Appel direct de `handle_command` depuis le bot |
 | `betterstack` | Incident créé hors du monitor | Webhook ou poll `index.json` |
 
 ## Structure

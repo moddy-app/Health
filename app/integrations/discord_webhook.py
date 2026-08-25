@@ -12,7 +12,7 @@ import logging
 
 import httpx
 
-from ..render.components import IS_COMPONENTS_V2
+from ..render.raw import IS_COMPONENTS_V2
 
 log = logging.getLogger("hm.discord")
 

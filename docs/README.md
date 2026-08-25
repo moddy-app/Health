@@ -41,7 +41,8 @@ bannière.
 3. **Une panne Redis n'empêche jamais une alerte de partir.** Tout l'état est
    mirroré en mémoire et resynchronisé au retour.
 4. **Si le bot est mort, l'alerte part quand même**, par webhook — c'est
-   précisément le cas où on en a le plus besoin.
+   précisément le cas où on en a le plus besoin. Et le bot est une application
+   Discord **dédiée**, distincte de Moddy : il survit à une panne de Moddy.
 5. **Le monitor est lui-même surveillé**, par un heartbeat sortant vers Better
    Stack. Sinon on aurait un système de surveillance dont la mort n'est
    constatée par personne.

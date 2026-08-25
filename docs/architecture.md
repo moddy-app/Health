@@ -40,7 +40,7 @@ app/
 ├── util.py            Horodatage ISO-8601, âge, identifiant d'incident
 │
 ├── api/
-│   ├── ingest.py      POST /ingest/heartbeat, /ingest/command
+│   ├── ingest.py      POST /ingest/heartbeat
 │   ├── webhooks.py    POST /ingest/betterstack
 │   ├── public.py      GET /v1/status, /v1/status/banner
 │   └── health.py      GET /health
@@ -55,15 +55,30 @@ app/
 │
 ├── integrations/
 │   ├── betterstack.py Écriture v2, parsing index.json, anti-boucle
-│   ├── discord_webhook.py  Envoi/édition directs, repli embed
-│   └── redis_bus.py   Pubsub vers/depuis le bot, ACK
+│   └── discord_webhook.py  Envoi/édition directs, repli embed
+│
+├── bot/
+│   ├── client.py      HealthBot : intents, setup_hook, on_ready, on_message
+│   ├── publisher.py   Publication/édition d'incident par le bot
+│   ├── sticky.py      Boucle sticky : debounce, verrou, persistance de l'ID
+│   ├── views.py       StickyStatusView, bouton Refresh persistant
+│   ├── modals.py      Modals V2 : create / update / resolve / maintenance
+│   └── commands.py    Groupe /status, check staff
 │
 └── render/
-    ├── components.py  JSON Components V2
-    └── colors.py      Palette, emojis, mapping des niveaux
+    ├── model.py       IncidentPresentation — le modèle commun
+    ├── theme.py       Couleurs, icônes, libellés
+    ├── layout.py      Rendu -> discord.ui.LayoutView (chemin bot)
+    ├── raw.py         Rendu -> JSON brut (chemin webhook)
+    └── colors.py      Palette et vocabulaire des niveaux
 ```
 
-Trois modules ne figuraient pas dans la spec d'origine :
+Le paquet `bot/` non plus n'était pas dans la spec d'origine : elle plaçait ces
+quatre responsabilités dans le bot Moddy, relié par un pubsub Redis. Le bot vit
+maintenant dans ce process, sous sa propre application Discord — voir
+[discord.md](discord.md#pourquoi-une-application-dédiée).
+
+Trois modules du cœur ne figuraient pas non plus dans la spec :
 
 - **`core/impact.py`** — la propagation d'impact, ajoutée après coup.
 - **`core/notifier.py`** — la chaîne de redondance méritait son fichier plutôt
@@ -97,7 +112,7 @@ continue.
 | `probe` | `HM_PROBE_INTERVAL` (30s) | Sonde HTTP des services sans process |
 | `check` | `HM_CHECK_INTERVAL` (15s) | Cycle de détection, réconciliation, calcul de `/v1/status` |
 | `notify-queue` | 30s | Vide la file de rattrapage Discord |
-| `sticky` | `DISCORD_STICKY_INTERVAL` (120s) | Demande au bot de rafraîchir le sticky |
+| `sticky` | `HM_STICKY_REFRESH_INTERVAL` (120s) | Rafraîchit le contenu du sticky |
 | `self-heartbeat` | `HM_SELF_HEARTBEAT_INTERVAL` (60s) | Ping Better Stack |
 | `bs-poll` | `BETTERSTACK_POLL_INTERVAL` (300s) | Réconciliation Better Stack |
 

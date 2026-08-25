@@ -83,6 +83,11 @@ class IncidentPresentation:
     def status_label(self) -> str:
         return theme.status_style(self.status, self.type).label
 
+    @property
+    def link_label(self) -> str:
+        """Libellé du bouton lien : une maintenance n'est pas un « incident »."""
+        return "View" if self.type == theme.MAINTENANCE else "View Incident"
+
     @classmethod
     def from_incident(
         cls,
@@ -136,6 +141,10 @@ class StatusPresentation:
     services: list[ServiceLine] = field(default_factory=list)
     incident_title: str | None = None
     incident_url: str | None = None
+    # Services couverts par la maintenance en cours, s'il y en a une — la
+    # détection d'état ne connaît pas ce niveau (§4), c'est une désignation
+    # manuelle, distincte de `level`.
+    maintenance_affected: frozenset[str] = field(default_factory=frozenset)
 
     @property
     def headline(self) -> str:
@@ -145,6 +154,22 @@ class StatusPresentation:
     @property
     def emoji(self) -> str:
         return theme.level_icon(self.level)
+
+    @property
+    def incident_icon(self) -> str:
+        """Icône de la ligne « {titre} » sous le bandeau.
+
+        Celle de la maintenance en cours prime sur celle du niveau : une
+        maintenance ne dégrade rien, l'agrégat resterait « opérationnel ».
+        Jamais `OnGoing`/`Resolved`, réservés à la ligne « Status: » (§11).
+        """
+        return colors.EMOJI_MAINTENANCE if self.maintenance_affected else self.emoji
+
+    def icon_for(self, service: ServiceLine) -> str:
+        """Icône d'un service dans la liste — la maintenance prime sur son état."""
+        if service.id in self.maintenance_affected:
+            return colors.EMOJI_MAINTENANCE
+        return theme.service_icon(service.status)
 
     @property
     def accent(self) -> int:
@@ -162,7 +187,8 @@ class StatusPresentation:
         process du monitor : ce serait un point de panne de plus, pour rien.
         """
         public = public or {}
-        current = public.get("incident") or public.get("maintenance") or {}
+        maintenance = public.get("maintenance")
+        current = public.get("incident") or maintenance or {}
         return cls(
             level=public.get("status") or colors.OPERATIONAL,
             updated_at=public.get("updated_at"),
@@ -179,4 +205,7 @@ class StatusPresentation:
             ],
             incident_title=current.get("title"),
             incident_url=current.get("url"),
+            maintenance_affected=frozenset(maintenance.get("affected") or [])
+            if maintenance
+            else frozenset(),
         )

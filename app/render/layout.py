@@ -51,7 +51,7 @@ def build_header_container(p: IncidentPresentation) -> ui.Container:
             ui.Section(
                 ui.TextDisplay(header_title(p)),
                 accessory=ui.Button(
-                    label="View Incident", style=discord.ButtonStyle.link, url=p.url
+                    label=p.link_label, style=discord.ButtonStyle.link, url=p.url
                 ),
             )
         )
@@ -95,12 +95,15 @@ def build_layout_view(p: IncidentPresentation) -> BaseView:
 # État courant — sticky et vue détaillée
 # ----------------------------------------------------------------------
 def status_summary(s: StatusPresentation) -> str:
-    """En-tête du sticky : bandeau, horodatage relatif, une ligne par service."""
+    """En-tête du sticky : bandeau, horodatage relatif, une ligne par service.
+
+    Un service couvert par une maintenance en cours porte l'icône de
+    maintenance à la place de son état réel, le temps de la fenêtre.
+    """
     lines = [f"### {s.emoji} {s.headline}", f"-# Last updated <t:{s.timestamp}:R>", ""]
     width = max((len(service.name) for service in s.services), default=0)
     for service in s.services:
-        icon = theme.service_icon(service.status)
-        lines.append(f"{icon} ``{service.name.ljust(width)}``  {service.label}")
+        lines.append(f"{s.icon_for(service)} ``{service.name.ljust(width)}``  {service.label}")
     return "\n".join(lines)
 
 
@@ -110,9 +113,9 @@ def status_header(s: StatusPresentation) -> str:
     if s.incident_title:
         title = f"[{s.incident_title}]({s.incident_url})" if s.incident_url else s.incident_title
         # `OnGoing`/`Resolved` sont réservés à la ligne « Status: » du message
-        # d'incident : ici, c'est l'icône de niveau qui s'applique, comme dans
-        # le titre juste au-dessus.
-        lines.append(f"{s.emoji} **{title}**")
+        # d'incident : ici, c'est l'icône de niveau — ou de maintenance —
+        # qui s'applique, comme dans le titre juste au-dessus.
+        lines.append(f"{s.incident_icon} **{title}**")
     return "\n".join(lines)
 
 
@@ -147,11 +150,12 @@ def check_summary(checks: dict) -> str | None:
     return f"{theme.check_icon(False)} {names} · {len(checks) - len(failing)}/{len(checks)} passing"
 
 
-def service_detail(service, hb: dict) -> str:
+def service_detail(service, hb: dict, *, icon: str | None = None) -> str:
     """Le bloc d'un service : état, puis les faits qui l'expliquent.
 
     C'est l'outil de diagnostic rapide pendant une crise — version, uptime,
-    dernier heartbeat, checks en échec.
+    dernier heartbeat, checks en échec. `icon` prend le pas sur celle de
+    l'état quand le service est couvert par une maintenance en cours.
     """
     facts = []
     if hb.get("version"):
@@ -167,7 +171,7 @@ def service_detail(service, hb: dict) -> str:
     if service.impacted_by:
         facts.append("impacted by " + ", ".join(service.impacted_by))
 
-    lines = [f"{theme.service_icon(service.status)} **{service.name}** · {service.label}"]
+    lines = [f"{icon or theme.service_icon(service.status)} **{service.name}** · {service.label}"]
     lines.append("-# " + " · ".join(facts))
     summary = check_summary(hb.get("checks") or {})
     if summary:

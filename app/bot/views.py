@@ -136,7 +136,7 @@ class StickyStatusView(BaseView):
                 # `OnGoing`/`Resolved` sont réservés à la ligne « Status: » du
                 # message d'incident : ici, l'icône de niveau s'applique.
                 container.add_item(
-                    ui.TextDisplay(f"{snapshot.emoji} **{snapshot.incident_title}**")
+                    ui.TextDisplay(f"{snapshot.incident_icon} **{snapshot.incident_title}**")
                 )
         else:
             container.add_item(ui.TextDisplay("### Status"))
@@ -174,7 +174,13 @@ class DetailView(BaseView):
             for service in snapshot.services:
                 container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
                 container.add_item(
-                    ui.TextDisplay(service_detail(service, heartbeats.get(service.id) or {}))
+                    ui.TextDisplay(
+                        service_detail(
+                            service,
+                            heartbeats.get(service.id) or {},
+                            icon=snapshot.icon_for(service),
+                        )
+                    )
                 )
         else:
             container.add_item(ui.TextDisplay("### Status"))

@@ -17,7 +17,7 @@ from .. import keys
 from ..config import Settings
 from ..render.model import StatusPresentation
 from ..state import Store
-from .views import StickyStatusView
+from .views import REFRESH_ID, StickyStatusView
 
 log = logging.getLogger("hm.bot.sticky")
 
@@ -57,7 +57,11 @@ class StickyManager:
     async def load(self) -> None:
         """Retrouve le sticky d'avant le redéploiement plutôt que d'en poster un autre.
 
-        Sans ça, chaque redéploiement laisse un cadavre dans le salon.
+        Redis n'est qu'un raccourci : sans lui — mémoire seule, ou instance
+        vidée — l'ID est perdu à chaque redémarrage, et le monitor postait un
+        sticky neuf en abandonnant le précédent. Un redéploiement de plus, un
+        cadavre de plus. Le salon, lui, ne ment jamais : c'est là qu'on va
+        chercher la vérité si Redis ne l'a pas.
         """
         raw = await self._store.get(keys.STICKY_MESSAGE_ID)
         self._message_id = int(raw) if raw and raw.isdigit() else None
@@ -129,6 +133,11 @@ class StickyManager:
         view = StickyStatusView(snapshot, self._s.discord_status_page_url)
         channel = await self._channel()
 
+        # Redis peut avoir perdu l'ID (mémoire seule, redéploiement) : le salon
+        # est la seule source de vérité qui survive à tout.
+        if self._message_id is None:
+            await self._adopt(channel)
+
         # Deuxième filet, celui qui ferme définitivement la course : si le
         # sticky est déjà le dernier message du salon, il n'y a rien à
         # descendre. Un repost ne ferait que produire le message qui déclenchera
@@ -151,6 +160,55 @@ class StickyManager:
         self._own.append(message.id)
         await self._store.set(keys.STICKY_MESSAGE_ID, str(message.id))
 
+    def _is_ours(self, message) -> bool:
+        """Un sticky à nous : posté par le bot, et portant le bouton Refresh.
+
+        Le `custom_id` distingue le sticky des messages d'incident, que le bot
+        poste dans le même salon et qu'il ne faut surtout pas supprimer.
+        """
+        user = self._bot.user
+        if user is None or getattr(message.author, "id", None) != user.id:
+            return False
+        return _carries(message.components, REFRESH_ID)
+
+    async def _ours(self, channel, limit: int = 50) -> list:
+        """Nos stickys encore présents dans le salon, du plus ancien au plus récent."""
+        found = []
+        try:
+            async for message in channel.history(limit=limit):
+                if self._is_ours(message):
+                    found.append(message)
+        except Exception as exc:
+            log.warning("historique du salon illisible: %s", exc)
+        found.reverse()
+        return found
+
+    async def _adopt(self, channel) -> None:
+        """Redis a oublié l'ID : on reprend le dernier sticky du salon et on
+        supprime les autres.
+
+        C'est ce qui rend le sticky insensible à une panne Redis — et à un
+        redéploiement pendant cette panne.
+        """
+        ours = await self._ours(channel)
+        if not ours:
+            return
+        keep = ours[-1]
+        for stale in ours[:-1]:
+            await self._delete(stale)
+        self._message_id = keep.id
+        self._own.append(keep.id)
+        await self._store.set(keys.STICKY_MESSAGE_ID, str(keep.id))
+        if len(ours) > 1:
+            log.info("%d sticky(s) orphelin(s) supprimé(s)", len(ours) - 1)
+
+    @staticmethod
+    async def _delete(message) -> None:
+        try:
+            await message.delete()
+        except Exception as exc:
+            log.debug("sticky déjà absent: %s", exc)
+
     async def _is_last(self, channel) -> bool:
         """Le sticky est-il déjà en bas du salon ?
 
@@ -168,12 +226,25 @@ class StickyManager:
         return False
 
     async def _delete_previous(self, channel) -> None:
-        """Supprimer l'ancien avant de poster le nouveau, sans exiger qu'il existe."""
-        if not self._message_id:
-            return
-        try:
-            previous = await channel.fetch_message(self._message_id)
-            await previous.delete()
-        except Exception as exc:
-            log.debug("ancien sticky déjà absent: %s", exc)
+        """Supprimer tout sticky présent avant d'en poster un neuf.
+
+        On balaie le salon plutôt que de se fier au seul ID connu : celui-ci
+        peut avoir été perdu, et un orphelin resterait alors à l'écran.
+        """
+        for stale in await self._ours(channel):
+            await self._delete(stale)
         self._message_id = None
+
+
+def _carries(components, custom_id: str) -> bool:
+    """Cherche un `custom_id` dans un arbre de composants V2.
+
+    `discord.Message.components` rend l'arbre brut : un Container porte des
+    ActionRow, qui portent les boutons. Pas de `walk_components` en 2.7.
+    """
+    for component in components or []:
+        if getattr(component, "custom_id", None) == custom_id:
+            return True
+        if _carries(getattr(component, "children", None), custom_id):
+            return True
+    return False

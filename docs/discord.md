@@ -252,9 +252,16 @@ Trois déclencheurs le font bouger, et ils peuvent tomber ensemble :
 - **Verrou asyncio.** Les trois déclencheurs peuvent arriver en même temps ;
   sans verrou, on se retrouve avec plusieurs stickys en double.
 - **Supprimer l'ancien avant de poster le nouveau**, en tolérant son absence.
-- **Persister l'ID** dans `hm:sticky:message_id`. Au démarrage, `fetch_message` :
-  si le message existe encore, on l'édite. Sinon chaque redéploiement laisse un
-  cadavre dans le salon.
+- **Le salon est la source de vérité, pas Redis.** `hm:sticky:message_id` n'est
+  qu'un raccourci. Sans Redis — mémoire seule, ou instance vidée — l'ID est
+  perdu à chaque redémarrage : le monitor postait alors un sticky neuf en
+  abandonnant le précédent, soit un cadavre par redéploiement. Et Railway
+  redéploie souvent. Au démarrage, si l'ID manque, le sticky **se retrouve dans
+  le salon** : il adopte le dernier message qui lui appartient et supprime les
+  autres.
+- **Un sticky se reconnaît à son bouton.** `custom_id: hm:sticky:refresh`, plus
+  l'auteur du message. C'est ce qui le distingue des messages d'incident, que le
+  bot poste dans le même salon et qu'il ne faut surtout pas supprimer.
 
 ## Bouton Refresh
 

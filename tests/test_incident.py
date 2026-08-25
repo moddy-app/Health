@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 
 from app import keys
@@ -10,7 +12,7 @@ from app.core.impact import ImpactGraph
 from app.core.incident import TYPE_DEGRADED, TYPE_MAINTENANCE, IncidentManager
 from app.integrations.betterstack import BetterStack
 from app.render import colors
-from app.util import iso
+from app.util import iso, utcnow
 
 
 class StubNotifier:
@@ -213,6 +215,57 @@ async def test_maintenance_requires_ends_at(manager):
         {"title": "M", "message": "m", "affected": ["moddy-api"], "ends_at": iso()},
     )
     assert (await manager.get_active())["type"] == TYPE_MAINTENANCE
+
+
+async def test_a_maintenance_absorbs_the_detection_instead_of_being_updated(manager, snapshot):
+    """Pendant une maintenance, un service qui tombe est l'objet de l'opération.
+
+    Constaté en production pendant la migration DNS : les services flappaient,
+    et chaque flap collait un « We are currently experiencing a service outage »
+    sous une maintenance annoncée — 28 updates, et autant de 422 côté Better
+    Stack, qui refuse le mélange des deux.
+    """
+    await manager.handle_command(
+        "maintenance.create",
+        {
+            "title": "DNS Migration",
+            "message": "m",
+            "affected": ["moddy-api"],
+            "ends_at": iso(utcnow() + timedelta(hours=1)),
+        },
+    )
+    for status in (DOWN, OPERATIONAL, DOWN):
+        await manager.reconcile(snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": status}))
+
+    incident = await manager.get_active()
+    assert incident["type"] == TYPE_MAINTENANCE
+    assert len(incident["updates"]) == 1
+
+
+async def test_a_finished_maintenance_gives_the_detection_back(manager, snapshot):
+    """Une fois la fenêtre passée, la maintenance ne couvre plus rien.
+
+    La laisser ouverte rendrait le monitor aveugle à la première vraie panne
+    qui suit — et elle continuerait de traîner dans le salon.
+    """
+    await manager.handle_command(
+        "maintenance.create",
+        {
+            "title": "DNS Migration",
+            "message": "m",
+            "affected": ["moddy-api"],
+            "ends_at": iso(utcnow() - timedelta(minutes=1)),
+        },
+    )
+    await manager.reconcile(snapshot(colors.OPERATIONAL, {"moddy-bot": OPERATIONAL}))
+    assert await manager.get_active() is None
+    assert (await manager.history())[0]["type"] == TYPE_MAINTENANCE
+
+    # Et la détection reprend son cours sur l'incident suivant.
+    await manager.reconcile(snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": DOWN}))
+    incident = await manager.get_active()
+    assert incident["origin"] == "auto"
+    assert incident["type"] != TYPE_MAINTENANCE
 
 
 async def test_history_is_capped(manager, store):

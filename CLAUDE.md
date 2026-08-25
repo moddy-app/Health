@@ -159,6 +159,14 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
   message ne cite le service en cause que si `service` figure dans les
   affectés — sinon un consommateur non concerné apprendrait quel service
   interne est en panne.
+- **Une maintenance n'est pas un incident, et la détection auto n'y touche
+  pas.** Pendant sa fenêtre, un service qui tombe est l'objet de l'opération :
+  `reconcile` se tait. `ends_at` passé, elle est close d'office — sinon le
+  monitor reste aveugle à la vraie panne qui suit.
+- **C'est le type du report Better Stack qui décide de l'état des ressources**,
+  jamais le niveau de l'incident. Un report `maintenance` n'accepte que
+  `maintenance`, un report `manual` ne l'accepte jamais : les mélanger vaut un
+  `422 affected_resources is invalid` à chaque cycle. D'où `bs_report_type`.
 - **Better Stack : `ends_at` reste `null` même sur un report résolu**, et
   `report_type` peut valoir `automatic`.
 - **L'ID d'un report va dans `hm:bs:owned` avant tout autre traitement**, sinon

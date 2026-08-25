@@ -111,12 +111,22 @@ class BetterStack:
     # ------------------------------------------------------------------
     # Ressources affectées
     # ------------------------------------------------------------------
-    def resources_for(self, services: list[str], statuses: dict[str, str], level: str) -> list[dict]:
+    def resources_for(
+        self,
+        services: list[str],
+        statuses: dict[str, str],
+        level: str,
+        *,
+        report_type: str | None = None,
+    ) -> list[dict]:
         """Ne marque que les ressources réellement affectées et mappées.
 
         Un service absent de `HM_BS_RESOURCE_MAP` est simplement ignoré : mieux
         vaut ne rien publier que salir la barre journalière d'une ressource qui
         va bien.
+
+        `report_type` est celui du report visé : c'est lui qui autorise — ou
+        interdit — l'état `maintenance` (voir `colors.bs_status_for`).
         """
         mapping = self._s.bs_resource_map
         out: list[dict] = []
@@ -128,7 +138,9 @@ class BetterStack:
             out.append(
                 {
                     "status_page_resource_id": resource_id,
-                    "status": colors.bs_status_for(level, statuses.get(service, "down")),
+                    "status": colors.bs_status_for(
+                        level, statuses.get(service, "down"), report_type
+                    ),
                 }
             )
         return out
@@ -254,9 +266,20 @@ class BetterStack:
         message: str,
         services: list[str],
         notify_subscribers: bool = False,
+        report_type: str | None = None,
     ) -> str | None:
-        """Résolution = un update avec `status: resolved` sur chaque ressource."""
-        resources = self.resources_for(services, {s: "operational" for s in services}, colors.OPERATIONAL)
+        """Résolution = un update avec `status: resolved` sur chaque ressource.
+
+        Sauf sur un report de maintenance : Better Stack n'y accepte que
+        `maintenance`. Une maintenance se termine par sa fenêtre, pas par un
+        `resolved` — que l'API refuserait.
+        """
+        resources = self.resources_for(
+            services,
+            {s: "operational" for s in services},
+            colors.OPERATIONAL,
+            report_type=report_type,
+        )
         return await self.post_update(
             report_id,
             message=message,

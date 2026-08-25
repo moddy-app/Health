@@ -135,7 +135,10 @@ async def test_banner_message_reflects_degraded_and_maintenance(client):
     )
     await ctx.store.delete(keys.STATUS_PUBLIC)
     body = client.get("/v1/status/banner?service=moddy-api").json()
-    assert body["message"] == "**API** is experiencing degraded performance."
+    assert body["message"] == (
+        "**API** is experiencing degraded performance. "
+        "[View status](https://status.moddy.app)"
+    )
 
     await ctx.incidents.resolve(message="fixed")
     await ctx.incidents.open(
@@ -152,7 +155,7 @@ async def test_banner_message_reflects_degraded_and_maintenance(client):
     body = client.get("/v1/status/banner?service=moddy-api").json()
     assert body["message"] == (
         "**API** is undergoing scheduled maintenance, "
-        "from 2026-08-25 02:00 to 04:00 UTC."
+        "from 2026-08-25 02:00 to 04:00 UTC. [View status](https://status.moddy.app)"
     )
 
 
@@ -172,7 +175,7 @@ async def test_banner_maintenance_window_spans_two_days(client):
     body = client.get("/v1/status/banner").json()
     assert body["message"] == (
         "**Some Moddy services** are undergoing scheduled maintenance, "
-        "from 2026-08-25 23:00 to 2026-08-26 01:00 UTC."
+        "from 2026-08-25 23:00 to 2026-08-26 01:00 UTC. [View status](https://status.moddy.app)"
     )
 
 
@@ -189,7 +192,10 @@ async def test_banner_maintenance_without_a_window_says_nothing_about_it(client)
     )
     await ctx.store.delete(keys.STATUS_PUBLIC)
     body = client.get("/v1/status/banner").json()
-    assert body["message"] == "**Some Moddy services** are undergoing scheduled maintenance."
+    assert body["message"] == (
+        "**Some Moddy services** are undergoing scheduled maintenance. "
+        "[View status](https://status.moddy.app)"
+    )
 
 
 def test_rate_limit_kicks_in(client):

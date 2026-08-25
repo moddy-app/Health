@@ -82,9 +82,11 @@ def _banner_message(current: dict, service: str | None, settings: Settings) -> s
     else:
         text = f"**{subject}** {verb} currently unavailable."
 
-    url = current.get("url")
-    if url:
-        text += f" [View status]({url})"
+    # Le lien est toujours présent : à défaut du report Better Stack (pas
+    # encore créé, ou intégration désactivée), la status page elle-même reste
+    # une destination valable.
+    url = current.get("url") or settings.discord_status_page_url
+    text += f" [View status]({url})"
     return text
 
 

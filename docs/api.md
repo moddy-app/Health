@@ -194,7 +194,9 @@ Une maintenance ou une dégradation changent le verbe (« is undergoing schedule
 maintenance », « is experiencing degraded performance »), jamais le principe :
 un service qui n'est pas concerné n'a pas à apprendre lequel l'est. Un
 `service` absent, inconnu, ou non affecté retombe toujours sur le générique —
-jamais d'erreur.
+jamais d'erreur. Le lien est **toujours** présent : à défaut de report Better
+Stack (pas encore créé, ou intégration désactivée), il pointe sur la status
+page elle-même (`DISCORD_STATUS_PAGE_URL`) plutôt que de disparaître.
 
 Une maintenance ajoute sa fenêtre, tirée de `starts_at`/`ends_at` :
 

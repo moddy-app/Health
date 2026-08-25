@@ -8,18 +8,25 @@ from app import keys
 from app.core.notifier import Notifier
 
 
-class FakeBus:
-    def __init__(self, ack: str | None = None) -> None:
-        self.ack = ack
-        self.calls: list[tuple[str, dict]] = []
+class FakeBot:
+    """Doublure du transport bot : ce que `IncidentPublisher` expose au notifier."""
 
-    async def notify(self, action, payload, expect_ack=True):
-        self.calls.append((action, payload))
-        return self.ack
+    def __init__(self, message_id: str | None = "1409", enabled: bool = True) -> None:
+        self.enabled = enabled
+        self.message_id = message_id
+        self.calls: list[tuple[str, str | None]] = []
+        self.sticky: list[dict] = []
 
-    async def signal(self, action, payload=None):
-        self.calls.append((action, payload or {}))
-        return True
+    async def send(self, presentation):
+        self.calls.append(("send", None))
+        return self.message_id
+
+    async def edit(self, message_id, presentation):
+        self.calls.append(("edit", message_id))
+        return self.message_id is not None
+
+    async def refresh_sticky(self, public):
+        self.sticky.append(public)
 
 
 class FakeWebhook:
@@ -28,9 +35,11 @@ class FakeWebhook:
         self.message_id = message_id
         self.sent = 0
         self.edited: list[str] = []
+        self.components: list[list[dict]] = []
 
     async def send(self, components, embed=None):
         self.sent += 1
+        self.components.append(components)
         return self.message_id
 
     async def edit(self, message_id, components, embed=None):
@@ -53,26 +62,26 @@ def incident(**over) -> dict:
 
 @pytest.fixture
 def make(settings, store):
-    def _make(bus, webhook):
-        return Notifier(settings, store, bus, webhook), store
+    def _make(bot, webhook):
+        return Notifier(settings, store, bot, webhook), store
 
     return _make
 
 
 async def test_bot_is_preferred(make):
-    bus, webhook = FakeBus(ack="1409"), FakeWebhook()
-    notifier, _ = make(bus, webhook)
+    bot, webhook = FakeBot(), FakeWebhook()
+    notifier, _ = make(bot, webhook)
 
     result = await notifier.dispatch(incident())
     assert result["discord_transport"] == "bot"
     assert result["discord_message_id"] == "1409"
-    assert bus.calls[0][0] == "incident.post"
+    assert bot.calls == [("send", None)]
     assert webhook.sent == 0
 
 
 async def test_webhook_takes_over_when_the_bot_is_silent(make):
-    bus, webhook = FakeBus(ack=None), FakeWebhook()
-    notifier, _ = make(bus, webhook)
+    bot, webhook = FakeBot(message_id=None), FakeWebhook()
+    notifier, _ = make(bot, webhook)
 
     result = await notifier.dispatch(incident())
     assert result["discord_transport"] == "webhook"
@@ -80,19 +89,17 @@ async def test_webhook_takes_over_when_the_bot_is_silent(make):
     assert webhook.sent == 1
 
 
-async def test_components_v2_flag_is_relayed_to_the_bot(make):
-    bus, webhook = FakeBus(ack="1409"), FakeWebhook()
-    notifier, _ = make(bus, webhook)
+async def test_the_webhook_sends_components_v2(make):
+    bot, webhook = FakeBot(enabled=False), FakeWebhook()
+    notifier, _ = make(bot, webhook)
 
     await notifier.dispatch(incident())
-    payload = bus.calls[0][1]
-    assert payload["flags"] == 32768
-    assert payload["components"][0]["type"] == 17
+    assert webhook.components[0][0]["type"] == 17
 
 
 async def test_everything_down_queues_then_replays(make):
-    bus, webhook = FakeBus(ack=None), FakeWebhook(enabled=False)
-    notifier, store = make(bus, webhook)
+    bot, webhook = FakeBot(enabled=False), FakeWebhook(enabled=False)
+    notifier, store = make(bot, webhook)
 
     await notifier.dispatch(incident())
     assert await store.llen(keys.NOTIFY_QUEUE) == 1
@@ -104,8 +111,8 @@ async def test_everything_down_queues_then_replays(make):
 
 
 async def test_queue_keeps_its_order_while_no_channel_is_back(make):
-    bus, webhook = FakeBus(ack=None), FakeWebhook(enabled=False)
-    notifier, store = make(bus, webhook)
+    bot, webhook = FakeBot(enabled=False), FakeWebhook(enabled=False)
+    notifier, store = make(bot, webhook)
 
     await notifier.dispatch(incident(id="inc_1"))
     await notifier.dispatch(incident(id="inc_2"))
@@ -116,28 +123,28 @@ async def test_queue_keeps_its_order_while_no_channel_is_back(make):
 
 async def test_a_retry_never_produces_two_messages(make):
     """Le bot a déjà relayé : le retry ne doit pas repartir par webhook."""
-    bus, webhook = FakeBus(ack="1409"), FakeWebhook()
-    notifier, _ = make(bus, webhook)
+    bot, webhook = FakeBot(), FakeWebhook()
+    notifier, _ = make(bot, webhook)
 
     sent = await notifier.dispatch(incident())
     await notifier.dispatch(sent)
-    assert len(bus.calls) == 1
+    assert len(bot.calls) == 1
     assert webhook.sent == 0
 
 
 async def test_a_new_update_is_edited_not_reposted(make):
-    bus, webhook = FakeBus(ack="1409"), FakeWebhook()
-    notifier, _ = make(bus, webhook)
+    bot, webhook = FakeBot(), FakeWebhook()
+    notifier, _ = make(bot, webhook)
 
     sent = await notifier.dispatch(incident())
     sent["updates"].append({"kind": "updated", "at": "2026-08-24T19:55:00Z", "message": "Fix."})
     await notifier.dispatch(sent)
-    assert [call[0] for call in bus.calls] == ["incident.post", "incident.edit"]
+    assert bot.calls == [("send", None), ("edit", "1409")]
 
 
-async def test_webhook_reposts_when_it_cannot_edit_the_bot_message(make):
-    bus, webhook = FakeBus(ack=None), FakeWebhook(message_id=None)
-    notifier, _ = make(bus, webhook)
+async def test_webhook_reposts_when_it_cannot_edit_its_own_message(make):
+    bot, webhook = FakeBot(enabled=False), FakeWebhook(message_id=None)
+    notifier, _ = make(bot, webhook)
 
     delivered = await notifier.deliver(
         incident(discord_message_id="1409", discord_transport="webhook")
@@ -148,7 +155,7 @@ async def test_webhook_reposts_when_it_cannot_edit_the_bot_message(make):
 
 
 async def test_rate_limit_is_per_service_and_state(make):
-    notifier, _ = make(FakeBus(), FakeWebhook())
+    notifier, _ = make(FakeBot(), FakeWebhook())
     assert await notifier.allow("moddy-bot", "down") is True
     assert await notifier.allow("moddy-bot", "down") is False
     assert await notifier.allow("moddy-bot", "degraded") is True
@@ -156,10 +163,55 @@ async def test_rate_limit_is_per_service_and_state(make):
 
 
 async def test_reset_clears_the_rate_limit_on_recovery(make):
-    notifier, _ = make(FakeBus(), FakeWebhook())
+    notifier, _ = make(FakeBot(), FakeWebhook())
     assert await notifier.allow("moddy-bot", "down") is True
     assert await notifier.allow("moddy-bot", "down") is False
 
     await notifier.reset("moddy-bot")
     assert await notifier.allow("moddy-bot", "down") is True
     assert await notifier.allow("moddy-bot", "degraded") is True
+
+
+async def test_a_bot_message_is_never_edited_by_the_webhook(make):
+    """Le transport est collant : le webhook repost au lieu d'éditer."""
+    bot, webhook = FakeBot(message_id=None), FakeWebhook()
+    notifier, _ = make(bot, webhook)
+
+    delivered = await notifier.deliver(
+        incident(discord_message_id="1409", discord_transport="bot")
+    )
+    assert delivered is True
+    assert webhook.edited == []  # jamais un PATCH sur le message d'un autre auteur
+    assert webhook.sent == 1
+
+
+async def test_the_bot_stays_out_of_a_webhook_thread(make):
+    """Un message posté par webhook reste au webhook tant qu'il répond."""
+    bot, webhook = FakeBot(), FakeWebhook()
+    notifier, _ = make(bot, webhook)
+
+    result = await notifier.deliver(
+        incident(discord_message_id="w1", discord_transport="webhook")
+    )
+    assert result is True
+    assert bot.calls == []
+    assert webhook.edited == ["w1"]
+
+
+async def test_the_bot_rescues_a_webhook_thread_when_the_webhook_dies(make):
+    bot, webhook = FakeBot(), FakeWebhook(enabled=False)
+    notifier, _ = make(bot, webhook)
+
+    result = await notifier.deliver(
+        incident(discord_message_id="w1", discord_transport="webhook")
+    )
+    assert result is True
+    assert bot.calls == [("send", None)]
+
+
+async def test_sticky_refresh_goes_to_the_bot(make):
+    bot, webhook = FakeBot(), FakeWebhook()
+    notifier, _ = make(bot, webhook)
+
+    await notifier.refresh_sticky({"status": "operational"})
+    assert bot.sticky == [{"status": "operational"}]

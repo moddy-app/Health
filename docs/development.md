@@ -111,6 +111,22 @@ itéré tel quel pour l'affichage.
 
 ## Modifier le rendu Discord
 
-Tout est dans `render/components.py` et `render/colors.py`. Le JSON produit part
-tel quel au bot **et** au webhook : une seule fonction de rendu, deux transports.
-`test_components.py` verrouille la forme contre le payload de référence.
+Un modèle, `render/model.py`, et deux renderers : `render/layout.py` pour le bot
+(objets discord.py), `render/raw.py` pour le webhook (JSON brut). Toucher l'un
+sans toucher l'autre casse `test_render_parity.py`, et c'est exactement le rôle
+de ce test — les deux chemins ne doivent jamais diverger.
+
+Les couleurs, icônes et libellés sont dans `render/theme.py` ; `render/colors.py`
+garde la palette et le vocabulaire des niveaux, partagés avec le cœur.
+`test_render.py` verrouille la forme contre le payload de référence.
+
+Trois icônes sont autorisées, pas une de plus — voir
+[discord.md](discord.md#sobriété-du-rendu).
+
+## Travailler sur le bot sans token
+
+`DISCORD_TOKEN` vide : le bot n'est pas construit, `publisher.enabled` reste
+faux, et toute la chaîne bascule sur le webhook. Le monitor démarre, détecte et
+sert `/v1/status` normalement. Les tests du bot (`test_publisher.py`,
+`test_sticky.py`, `test_bot_views.py`) tournent sur des doublures : aucun ne
+sort sur le réseau ni n'ouvre de gateway.

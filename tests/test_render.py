@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from app.render import colors
-from app.render.components import (
+from app.render.model import IncidentPresentation
+from app.render.raw import (
     IS_COMPONENTS_V2,
     TYPE_CONTAINER,
     TYPE_SECTION,
     TYPE_SEPARATOR,
     TYPE_TEXT_DISPLAY,
-    build_incident_components,
-    build_incident_embed,
+    build_raw_components,
+    build_raw_embed,
 )
 
 NAMES = {"moddy-bot": "Moddy Bot", "moddy-api": "API", "moddy-dashboard": "Dashboard"}
@@ -33,32 +34,52 @@ INCIDENT = {
 }
 
 
+def render(**over):
+    return build_raw_components(IncidentPresentation.from_incident({**INCIDENT, **over}, NAMES))
+
+
 def test_flag_value():
     assert IS_COMPONENTS_V2 == 32768
 
 
 def test_two_containers():
-    header, updates = build_incident_components(INCIDENT, NAMES)
+    header, updates = render()
     assert header["type"] == TYPE_CONTAINER
     assert updates["type"] == TYPE_CONTAINER
     assert updates["accent_color"] is None
 
 
 def test_resolved_incident_is_green_with_check_emoji():
-    header, _ = build_incident_components(INCIDENT, NAMES)
+    header, _ = render()
     assert header["accent_color"] == colors.ACCENT_RESOLVED
     assert colors.EMOJI_RESOLVED in header["components"][0]["components"][0]["content"]
     assert "**Status:** " + colors.EMOJI_RESOLVED + "Resolved" in header["components"][1]["content"]
 
 
 def test_ongoing_major_outage_is_red():
-    header, _ = build_incident_components({**INCIDENT, "status": "open"}, NAMES)
+    header, _ = render(status="open")
     assert header["accent_color"] == colors.ACCENT_MAJOR
     assert colors.EMOJI_ONGOING in header["components"][0]["components"][0]["content"]
 
 
+def test_only_the_three_allowed_icons_are_used():
+    """Le rendu doit rester sobre : trois icônes, jamais d'émoji décoratif."""
+    allowed = {colors.EMOJI_ONGOING, colors.EMOJI_RESOLVED, colors.EMOJI_PENDING}
+    from app.render import theme
+
+    used = {style.emoji for style in theme.STATUS_STYLES.values()}
+    assert used <= allowed
+    assert set(theme.SERVICE_ICONS.values()) <= allowed
+
+
+def test_maintenance_shows_its_own_status_while_ongoing():
+    header, _ = render(status="open", type="maintenance", level="maintenance")
+    assert "Maintenance" in header["components"][1]["content"]
+    assert header["accent_color"] == colors.ACCENT_MAINTENANCE
+
+
 def test_header_carries_link_button():
-    header, _ = build_incident_components(INCIDENT, NAMES)
+    header, _ = render()
     section = header["components"][0]
     assert section["type"] == TYPE_SECTION
     assert section["accessory"]["style"] == 5
@@ -67,18 +88,18 @@ def test_header_carries_link_button():
 
 def test_header_without_url_degrades_to_text():
     """Une Section sans accessory est refusée par l'API Discord."""
-    header, _ = build_incident_components({**INCIDENT, "url": None}, NAMES)
+    header, _ = render(url=None)
     assert header["components"][0]["type"] == TYPE_TEXT_DISPLAY
 
 
 def test_affected_services_use_display_names():
-    header, _ = build_incident_components(INCIDENT, NAMES)
+    header, _ = render()
     body = header["components"][1]["content"]
     assert "``Moddy Bot``, ``API``, ``Dashboard``" in body
 
 
 def test_updates_are_separated_and_timestamped():
-    _, updates = build_incident_components(INCIDENT, NAMES)
+    _, updates = render()
     kinds = [c for c in updates["components"] if c["type"] == TYPE_TEXT_DISPLAY]
     separators = [c for c in updates["components"] if c["type"] == TYPE_SEPARATOR]
     assert kinds[0]["content"] == "### **Updates:**"
@@ -89,21 +110,26 @@ def test_updates_are_separated_and_timestamped():
 
 
 def test_multiline_message_is_fully_quoted():
-    incident = {
-        **INCIDENT,
-        "updates": [{"kind": "updated", "at": "2026-08-24T19:55:00Z", "message": "a\nb"}],
-    }
-    _, updates = build_incident_components(incident, NAMES)
+    _, updates = render(
+        updates=[{"kind": "updated", "at": "2026-08-24T19:55:00Z", "message": "a\nb"}]
+    )
     assert updates["components"][-1]["content"].endswith("> a\n> b")
 
 
+def test_only_the_last_updates_are_rendered():
+    many = [
+        {"kind": "updated", "at": "2026-08-24T19:55:00Z", "message": f"m{i}"} for i in range(20)
+    ]
+    _, updates = render(updates=many)
+    assert "-# 5 earlier update(s) not shown." in updates["components"][1]["content"]
+
+
 def test_no_updates_means_single_container():
-    containers = build_incident_components({**INCIDENT, "updates": []}, NAMES)
-    assert len(containers) == 1
+    assert len(render(updates=[])) == 1
 
 
 def test_embed_fallback_keeps_the_essentials():
-    embed = build_incident_embed(INCIDENT, NAMES)
+    embed = build_raw_embed(IncidentPresentation.from_incident(INCIDENT, NAMES))
     assert embed["title"] == INCIDENT["title"]
     assert embed["url"] == INCIDENT["url"]
     assert embed["color"] == colors.ACCENT_RESOLVED

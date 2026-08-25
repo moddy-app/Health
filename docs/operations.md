@@ -18,11 +18,57 @@ dépendances redémarre le service au pire moment.
 
 1. Renseigner `HM_INGEST_TOKEN` et le propager aux services émetteurs.
 2. Attacher un Redis (`REDIS_URL` en `redis.railway.internal`).
-3. Configurer `DISCORD_WEBHOOK_URL` — **et tester l'envoi Components V2**, c'est
-   le maillon critique de la redondance et le seul non validé automatiquement.
-4. Créer le Heartbeat monitor Better Stack, renseigner `HM_SELF_HEARTBEAT_URL`.
-5. Créer la souscription webhook depuis `status.moddy.app` (manuel, avec
+3. Créer l'application Discord dédiée « Moddy Health Monitor », l'inviter dans
+   la guild, renseigner `DISCORD_TOKEN`, `DISCORD_GUILD_ID`,
+   `DISCORD_STATUS_CHANNEL_ID` et `DISCORD_STAFF_ROLE_ID`.
+4. Uploader les trois icônes en **application emojis** sur cette application
+   (portail développeur). Sans ça, le rendu casse côté webhook — un émoji
+   appartenant à un serveur que l'app ne connaît pas s'affiche cassé.
+5. Créer le webhook **à la main** dans les paramètres du salon (surtout pas
+   depuis l'application) et renseigner `DISCORD_WEBHOOK_URL` — **puis tester
+   l'envoi Components V2**, c'est le maillon critique de la redondance et le
+   seul non validé automatiquement.
+6. Créer le Heartbeat monitor Better Stack, renseigner `HM_SELF_HEARTBEAT_URL`.
+7. Créer la souscription webhook depuis `status.moddy.app` (manuel, avec
    confirmation par email).
+
+Les permissions Discord nécessaires dans le salon de statut : `View Channel`,
+`Send Messages`, `Embed Links`, `Manage Messages` (supprimer l'ancien sticky) et
+`Read Message History` (le retrouver après un redéploiement).
+
+## Logs
+
+Railway lit les logs émis en **JSON sur une seule ligne** et en tire deux
+champs : `message`, affiché dans l'explorateur, et `level`, qui colore la ligne
+et sert au filtrage (`@level:error`).
+
+Railway n'accepte que quatre niveaux, là où Python en a cinq et les nomme
+autrement :
+
+| Python | Railway |
+|---|---|
+| `DEBUG` | `debug` |
+| `INFO` | `info` |
+| `WARNING` | **`warn`** |
+| `ERROR` | `error` |
+| `CRITICAL` | `error` (Railway n'a rien au-dessus) |
+
+Sans cette traduction, tout ressort en `info` : un `WARNING` de perte de Redis
+se noie dans le flux, et c'est précisément la ligne qu'on cherche pendant une
+panne.
+
+`HM_LOG_FORMAT` vaut `auto` par défaut : JSON dès que `RAILWAY_ENVIRONMENT` ou
+`RAILWAY_SERVICE_ID` est présent, texte lisible sinon. `json` et `text` forcent
+l'un ou l'autre.
+
+Deux détails qui comptent :
+
+- **Une trace reste attachée à son message.** C'est tout l'intérêt du format
+  structuré : en texte brut, Railway découpe une trace en une ligne de log par
+  ligne de trace.
+- **Un `extra=` remonte tel quel** et devient filtrable. Le `color_message`
+  d'uvicorn, lui, est écarté : c'est la variante ANSI du message, illisible
+  dans l'explorateur.
 
 ### À corriger sur la status page
 
@@ -106,7 +152,7 @@ recharge l'état depuis Redis (`Detector.load()`).
 
 ## Arrêt
 
-Le lifespan FastAPI intercepte SIGTERM : annulation des boucles, arrêt du bus,
+Le lifespan FastAPI intercepte SIGTERM : annulation des boucles, arrêt du sticky,
 `store.flush()` — une dernière tentative de reconnexion et de resync — puis
 fermeture du client HTTP. Railway redéploie souvent, ce flush évite de perdre
 l'état accumulé pendant une coupure Redis.

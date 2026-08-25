@@ -29,7 +29,7 @@ DÉTECTION (auto)          COMMANDE (staff)          BETTER STACK
 | `origin` | Déclencheur | Entrée |
 |---|---|---|
 | `auto` | `reconcile()` sur un snapshot | Boucle de check |
-| `discord` | `/status *` du staff | Pubsub `moddy:hm:command` ou `POST /ingest/command` |
+| `discord` | `/status *` du staff | Appel direct de `handle_command` depuis le bot |
 | `betterstack` | Incident créé hors du monitor | Webhook ou poll `index.json` |
 
 ## Structure
@@ -76,7 +76,8 @@ issu du `shortlink` Better Stack quand il est disponible, reconstruit sinon).
 grace period          -> ne rien faire
 niveau operational    -> résoudre l'incident actif s'il est d'origine `auto`
 aucun incident actif  -> en ouvrir un, si le rate-limit le permet
-incident actif        -> le mettre à jour si `affected` ou `level` a changé
+incident actif        -> le mettre à jour si `affected` ou `level` a changé,
+                         et si le rate-limit le permet
 ```
 
 Un incident ouvert à la main ou venu de Better Stack est **enrichi** par la
@@ -87,6 +88,21 @@ un humain qui le ferme.
 Le rate-limit porte sur les **causes racines** (`snapshot.failing`), pas sur les
 services dégradés par ricochet : sinon un seul incident consommerait la fenêtre
 de tous les services à la fois.
+
+### Trois gardes contre l'update en boucle
+
+Constaté en production : un incident adopté depuis Better Stack prenait un
+update toutes les 15 secondes, sur Discord *et* sur la status page.
+
+1. **La garde de sortie compare le niveau qui sera réellement écrit**, pas le
+   niveau observé. Le niveau d'un incident non-`auto` n'étant jamais réécrit,
+   comparer l'observé au sien rouvrait la garde à chaque cycle.
+2. **Le rate-limit couvre tout update automatique**, plus seulement ceux qui
+   apportent un service de plus. C'est le seul garde-fou quand la
+   réconciliation se déclenche en boucle.
+3. **Un update automatique identique au précédent n'est pas publié** — même
+   texte, même niveau, mêmes services. Un membre du staff, lui, a le droit de
+   répéter : la garde ne s'applique qu'au chemin automatique (`dedupe=True`).
 
 ### Textes générés
 

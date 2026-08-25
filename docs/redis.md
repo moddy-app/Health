@@ -26,13 +26,13 @@ en dur ailleurs.
 Trois clés ne figuraient pas dans la spec : `hm:bs:last_event_at`,
 `hm:notify:queue` (nommée mais non tabulée) et `hm:notify:rl:*`.
 
-## Canaux pubsub
+## Plus aucun canal pubsub
 
-| Canal | Sens | Contenu |
-|---|---|---|
-| `moddy:hm:notify` | monitor → bot | `{nonce, action, payload}` — `incident.post`, `incident.edit`, `sticky.refresh` |
-| `moddy:hm:notify:ack` | bot → monitor | `{nonce, message_id}` |
-| `moddy:hm:command` | bot → monitor | `{action, payload}` — commandes du staff |
+La spec d'origine faisait dialoguer le monitor et le bot Moddy par trois canaux
+(`moddy:hm:notify`, `moddy:hm:notify:ack`, `moddy:hm:command`). Le bot vit
+désormais dans le même process : il appelle directement le publisher et
+`IncidentManager.handle_command`. Un tour par Redis n'apporterait qu'un point de
+panne — et il faisait dépendre l'alerte de Redis, ce que l'invariant §4 refuse.
 
 ## Le store
 

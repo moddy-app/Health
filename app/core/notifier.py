@@ -1,14 +1,15 @@
 """Chaîne de redondance Discord.
 
-    1. Bot Moddy (pubsub Redis `moddy:hm:notify`)
-           | échec ou pas d'ACK sous 5s
+    1. Bot Health Monitor (client discord.py, même process)
+           | échec ou pas d'ACK sous HM_BOT_ACK_TIMEOUT
     2. Webhook Discord direct
            | échec (Discord down)
     3. File de rattrapage `hm:notify:queue` + log
 
 Le niveau 1 est préféré parce que le bot sait éditer ses propres messages et
-gérer le sticky. Le niveau 2 garantit que si le bot est mort, l'alerte part
-quand même.
+gérer le sticky. Le niveau 2 garantit que si la gateway est perdue ou
+l'application suspendue, l'alerte part quand même — d'où un webhook créé à la
+main dans le salon, et surtout pas par cette application.
 """
 
 from __future__ import annotations
@@ -16,12 +17,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from typing import Protocol
 
 from .. import keys
 from ..config import Settings
 from ..integrations.discord_webhook import DiscordWebhook
-from ..integrations.redis_bus import RedisBus
-from ..render.components import build_incident_components, build_incident_embed
+from ..render.model import IncidentPresentation
+from ..render.raw import build_raw_components, build_raw_embed
 from ..state import Store
 from ..util import iso
 from .impact import DEGRADED, DOWN
@@ -32,13 +34,41 @@ log = logging.getLogger("hm.notifier")
 QUEUE_MAX = 200
 
 
+class BotTransport(Protocol):
+    """Ce que le notifier attend du bot — voir `app/bot/publisher.py`."""
+
+    @property
+    def enabled(self) -> bool: ...
+
+    async def send(self, presentation: IncidentPresentation) -> str | None: ...
+
+    async def edit(self, message_id: str, presentation: IncidentPresentation) -> bool: ...
+
+    async def refresh_sticky(self, public: dict) -> None: ...
+
+
+class NoBot:
+    """Doublure quand aucun DISCORD_TOKEN n'est configuré : tout passe au webhook."""
+
+    enabled = False
+
+    async def send(self, presentation: IncidentPresentation) -> str | None:
+        return None
+
+    async def edit(self, message_id: str, presentation: IncidentPresentation) -> bool:
+        return False
+
+    async def refresh_sticky(self, public: dict) -> None:
+        return None
+
+
 class Notifier:
     def __init__(
-        self, settings: Settings, store: Store, bus: RedisBus, webhook: DiscordWebhook
+        self, settings: Settings, store: Store, bot: BotTransport, webhook: DiscordWebhook
     ) -> None:
         self._s = settings
         self._store = store
-        self._bus = bus
+        self._bot = bot
         self._webhook = webhook
 
     # ------------------------------------------------------------------
@@ -100,33 +130,39 @@ class Notifier:
         ):
             return True
 
-        components = build_incident_components(incident, self._s.service_names)
-        embed = build_incident_embed(incident, self._s.service_names)
+        presentation = IncidentPresentation.from_incident(incident, self._s.service_names)
         message_id = incident.get("discord_message_id")
         transport = incident.get("discord_transport")
 
         # --- Niveau 1 : le bot -------------------------------------------------
-        if not await self._already_sent(incident, "bot"):
-            action = "incident.edit" if message_id else "incident.post"
-            payload = {
-                "incident_id": incident.get("id"),
-                "channel_id": self._s.discord_status_channel_id,
-                "message_id": message_id,
-                "flags": 32768,
-                "components": components,
-                "embed": embed,
-            }
-            acked = await self._bus.notify(action, payload)
-            if acked:
+        if self._bot.enabled:
+            sent_id: str | None = None
+            # Le transport est collant : un message posté par webhook n'est pas
+            # éditable par le bot, et inversement.
+            if message_id and transport == "bot":
+                if await self._bot.edit(message_id, presentation):
+                    sent_id = message_id
+                else:
+                    log.warning("édition bot impossible, repost d'un message neuf")
+                    sent_id = await self._bot.send(presentation)
+            elif transport == "webhook" and self._webhook.enabled:
+                # Le message appartient au webhook : lui seul peut l'éditer, le
+                # bot ne ferait qu'en poster un doublon. On lui laisse la main.
+                pass
+            else:
+                sent_id = await self._bot.send(presentation)
+            if sent_id:
                 await self._mark_sent(incident, "bot")
-                incident["discord_message_id"] = acked
+                incident["discord_message_id"] = sent_id
                 incident["discord_transport"] = "bot"
                 incident["discord_channel_id"] = self._s.discord_status_channel_id
                 return True
 
         # --- Niveau 2 : le webhook --------------------------------------------
-        if self._webhook.enabled and not await self._already_sent(incident, "webhook"):
-            sent_id: str | None = None
+        if self._webhook.enabled:
+            components = build_raw_components(presentation)
+            embed = build_raw_embed(presentation)
+            sent_id = None
             if message_id and transport == "webhook":
                 if await self._webhook.edit(message_id, components, embed):
                     sent_id = message_id
@@ -182,8 +218,5 @@ class Notifier:
     # Sticky
     # ------------------------------------------------------------------
     async def refresh_sticky(self, public: dict) -> None:
-        """Demande au bot de rafraîchir le sticky (il en est propriétaire)."""
-        await self._bus.signal(
-            "sticky.refresh",
-            {"channel_id": self._s.discord_status_channel_id, "status": public},
-        )
+        """Le sticky appartient au bot : lui seul peut le poster et l'éditer."""
+        await self._bot.refresh_sticky(public)

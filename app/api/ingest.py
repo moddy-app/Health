@@ -1,4 +1,8 @@
-"""Entrées authentifiées : heartbeats des services, commandes du bot."""
+"""Entrée authentifiée : heartbeats des services.
+
+Les commandes du staff n'ont plus de route HTTP : le bot vit dans ce process et
+appelle `IncidentManager.handle_command` directement.
+""" 
 
 from __future__ import annotations
 
@@ -6,7 +10,7 @@ import logging
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .. import keys
@@ -46,11 +50,6 @@ class Heartbeat(BaseModel):
     meta: dict[str, Any] = Field(default_factory=dict)
 
 
-class Command(BaseModel):
-    action: str
-    payload: dict[str, Any] = Field(default_factory=dict)
-
-
 @router.post("/heartbeat")
 async def heartbeat(body: Heartbeat, ctx: Context = Depends(require_token)) -> dict:
     if body.service not in ctx.settings.services:
@@ -71,12 +70,3 @@ async def heartbeat(body: Heartbeat, ctx: Context = Depends(require_token)) -> d
         # Permet au service de dégrader son propre comportement pendant une crise.
         "incident_active": bool(incident and incident.get("status") != "resolved"),
     }
-
-
-@router.post("/command")
-async def command(
-    body: Command, background: BackgroundTasks, ctx: Context = Depends(require_token)
-) -> dict:
-    """Repli du bot quand Redis est down : même contrat, autre transport."""
-    background.add_task(ctx.incidents.handle_command, body.action, body.payload)
-    return {"ok": True, "action": body.action}

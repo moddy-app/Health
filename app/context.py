@@ -1,4 +1,4 @@
-"""Câblage des composants — un seul objet passé à l'API et aux boucles."""
+"""Câblage des composants — un seul objet passé à l'API, aux boucles et au bot."""
 
 from __future__ import annotations
 
@@ -8,6 +8,9 @@ from dataclasses import dataclass
 import httpx
 from fastapi import Request
 
+from .bot.client import HealthBot
+from .bot.publisher import IncidentPublisher
+from .bot.sticky import StickyManager
 from .config import Settings, get_settings
 from .core.detector import Detector
 from .core.incident import IncidentManager
@@ -16,7 +19,6 @@ from .core.probe import Probe
 from .core.scheduler import Scheduler
 from .integrations.betterstack import BetterStack
 from .integrations.discord_webhook import DiscordWebhook
-from .integrations.redis_bus import RedisBus
 from .state import Store
 
 log = logging.getLogger("hm.context")
@@ -29,7 +31,9 @@ class Context:
     http: httpx.AsyncClient
     betterstack: BetterStack
     webhook: DiscordWebhook
-    bus: RedisBus
+    publisher: IncidentPublisher
+    sticky: StickyManager
+    bot: HealthBot | None
     detector: Detector
     probe: Probe
     notifier: Notifier
@@ -47,20 +51,29 @@ def build_context(settings: Settings | None = None) -> Context:
     store = Store(settings.redis_url)
     betterstack = BetterStack(settings, store, client=http)
     webhook = DiscordWebhook(settings.discord_webhook_url, client=http)
-    bus = RedisBus(store, ack_timeout=settings.discord_bot_ack_timeout)
+
+    # Le publisher et le sticky existent toujours ; sans token Discord ils
+    # restent simplement désactivés et tout part par webhook.
+    publisher = IncidentPublisher(settings)
+    sticky = StickyManager(settings, store)
+
     detector = Detector(settings, store)
     probe = Probe(settings, store, http)
-    notifier = Notifier(settings, store, bus, webhook)
+    notifier = Notifier(settings, store, publisher, webhook)
     incidents = IncidentManager(settings, store, betterstack, notifier)
     scheduler = Scheduler(settings, store, detector, incidents, notifier, betterstack, probe)
 
-    return Context(
+    bot = HealthBot(settings) if settings.bot_enabled else None
+
+    ctx = Context(
         settings=settings,
         store=store,
         http=http,
         betterstack=betterstack,
         webhook=webhook,
-        bus=bus,
+        publisher=publisher,
+        sticky=sticky,
+        bot=bot,
         detector=detector,
         probe=probe,
         notifier=notifier,
@@ -68,18 +81,29 @@ def build_context(settings: Settings | None = None) -> Context:
         scheduler=scheduler,
     )
 
+    if bot is not None:
+        # Câblage croisé : le bot a besoin du contexte pour exécuter les
+        # commandes, le publisher et le sticky ont besoin du bot pour parler.
+        bot.bind(ctx, sticky)
+        publisher.bind(bot, sticky)
+        sticky.bind(bot)
+    else:
+        log.warning("DISCORD_TOKEN absent : le bot est désactivé, tout passe par le webhook")
+
+    return ctx
+
 
 async def startup(ctx: Context) -> None:
     await ctx.store.connect()
     await ctx.detector.load()
-    await ctx.bus.start(command_handler=ctx.incidents.handle_command)
+    await ctx.sticky.load()
     ctx.scheduler.start()
 
 
 async def shutdown(ctx: Context) -> None:
     """SIGTERM : Railway redéploie souvent, on flush avant de sortir."""
     await ctx.scheduler.stop()
-    await ctx.bus.stop()
+    await ctx.sticky.stop()
     await ctx.store.flush()
     await ctx.store.close()
     await ctx.http.aclose()

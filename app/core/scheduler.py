@@ -62,7 +62,7 @@ class Scheduler:
             self._spawn("probe", self._s.hm_probe_interval, self._probe_step)
         self._spawn("check", self._s.hm_check_interval, self._check_step)
         self._spawn("notify-queue", 30, self._queue_step)
-        self._spawn("sticky", self._s.discord_sticky_interval, self._sticky_step)
+        self._spawn("sticky", self._s.hm_sticky_refresh_interval, self._sticky_step)
         if self._s.hm_self_heartbeat_url:
             self._spawn("self-heartbeat", self._s.hm_self_heartbeat_interval, self._heartbeat_step)
         if self._s.betterstack_index_url:

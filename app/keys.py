@@ -25,14 +25,11 @@ STICKY_MESSAGE_ID = "hm:sticky:message_id"
 NOTIFY_SENT = "hm:notify:sent"
 NOTIFY_QUEUE = "hm:notify:queue"
 NOTIFY_RATELIMIT = "hm:notify:rl:{service}:{status}"
+# Anti-spam du bouton « Refresh », par utilisateur.
+REFRESH_COOLDOWN = "hm:sticky:cooldown:{user}"
 
 # Divers
 PUBLIC_RATELIMIT = "hm:ratelimit:{ip}"
-
-# Canaux pubsub (bot <-> monitor)
-CH_NOTIFY = "moddy:hm:notify"
-CH_NOTIFY_ACK = "moddy:hm:notify:ack"
-CH_COMMAND = "moddy:hm:command"
 
 
 def hb(service: str) -> str:

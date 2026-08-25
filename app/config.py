@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     port: int = 8080
     hm_ingest_token: str = ""
     hm_log_level: str = "INFO"
+    # `auto` : JSON structuré sur Railway (qui en tire le niveau et colore la
+    # ligne), texte lisible en local. `json` ou `text` pour forcer.
+    hm_log_format: str = "auto"
 
     # --- Services surveillés ---
     hm_services: str = "moddy-bot,moddy-api,moddy-altguard,moddy-feeds"
@@ -93,16 +96,32 @@ class Settings(BaseSettings):
     # Alerte si la souscription webhook semble coupée (10 échecs = désactivation
     # silencieuse côté Better Stack).
     hm_bs_webhook_silence_alert: int = 86_400
+    # Au-delà de cet âge, un incident Better Stack inconnu est de l'archive : on
+    # ne l'adopte pas. `ends_at` étant toujours `null`, l'âge du dernier update
+    # est le seul indice fiable qu'un report est clos.
+    hm_bs_adopt_max_age: int = 3_600
 
     # --- Discord ---
-    discord_webhook_url: str = ""
-    discord_status_channel_id: str = ""
+    # Application dédiée : token distinct de celui du bot Moddy, pour que le
+    # monitor reste capable de parler quand Moddy est down.
+    discord_token: str = ""
     discord_guild_id: str = ""
+    discord_status_channel_id: str = ""
+    discord_staff_role_id: str = ""
+    # Créé à la main dans le salon, jamais par cette application : si l'app est
+    # suspendue, le webhook doit lui survivre.
+    discord_webhook_url: str = ""
     discord_status_page_url: str = "https://status.moddy.app"
-    # Délai d'ACK du bot avant bascule sur le webhook.
-    discord_bot_ack_timeout: float = 5.0
-    # Rafraîchissement périodique du sticky message.
-    discord_sticky_interval: int = 120
+    # Délai au-delà duquel on considère que le bot n'a pas pris et on bascule
+    # sur le webhook.
+    hm_bot_ack_timeout: float = 5.0
+    hm_sticky_enabled: bool = True
+    # Secondes d'attente avant repost, après un message tiers dans le salon.
+    hm_sticky_debounce: int = 5
+    # Rafraîchissement passif du contenu du sticky.
+    hm_sticky_refresh_interval: int = 120
+    # Anti-spam du bouton « Refresh », par utilisateur.
+    hm_refresh_cooldown: int = 5
 
     # --- API publique ---
     hm_public_rate_limit: str = "60/minute"
@@ -175,6 +194,10 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return _csv(self.hm_cors_origins)
+
+    @property
+    def bot_enabled(self) -> bool:
+        return bool(self.discord_token and self.discord_status_channel_id)
 
     @property
     def betterstack_enabled(self) -> bool:

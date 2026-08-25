@@ -192,11 +192,21 @@ class IncidentManager:
         notify: bool = False,
         statuses: dict[str, str] | None = None,
         publish_betterstack: bool = True,
+        dedupe: bool = False,
     ) -> dict | None:
         incident = await self.get_active()
         if incident is None:
             log.warning("update demandé sans incident actif")
             return None
+
+        # Un update automatique qui ne dit rien de neuf n'en est pas un : sans
+        # cette garde, une réconciliation qui se rouvre à chaque cycle reposte
+        # le même texte toutes les 15s, sur Discord *et* sur la status page. Un
+        # membre du staff, lui, a le droit de répéter : s'il resoumet le même
+        # message, c'est qu'il le veut.
+        if dedupe and _is_noop_update(incident, message, level, affected):
+            log.debug("update identique au précédent ignoré (%s)", incident.get("id"))
+            return incident
 
         if level:
             incident["level"] = level
@@ -298,18 +308,27 @@ class IncidentManager:
         known = set(active.get("affected") or [])
         changed = set(affected) - known
         recovered = known - set(affected)
-        if not changed and not recovered and level == active.get("level"):
+        # Le niveau d'un incident ouvert ailleurs qu'ici n'est jamais réécrit :
+        # comparer le niveau *observé* au sien rouvrait la garde à chaque cycle,
+        # et l'incident prenait un update toutes les 15 secondes.
+        target_level = level if active.get("origin") == "auto" else active.get("level")
+        if not changed and not recovered and target_level == active.get("level"):
             return
+
+        # Le rate-limit vaut pour *tout* update automatique, pas seulement pour
+        # ceux qui apportent un service de plus : c'est le seul garde-fou quand
+        # la réconciliation se déclenche en boucle.
         newly_failing = [s for s in root if s in changed]
-        if changed and not await self._allow_any(newly_failing or sorted(changed), statuses):
+        if not await self._allow_any(newly_failing or sorted(changed) or root, statuses):
             return
 
         await self.add_update(
             message=_auto_message(level, root, snapshot.collateral, self._s),
-            level=level if active.get("origin") == "auto" else active.get("level"),
+            level=target_level,
             affected=affected,
             notify=False,
             statuses=statuses,
+            dedupe=True,
         )
 
     async def _allow_any(self, services: list[str], statuses: dict[str, str]) -> bool:
@@ -426,6 +445,15 @@ class IncidentManager:
         snapshot = await self._bs.poll_index()
         if snapshot is None:
             return
+
+        # `index.json` porte tout l'historique de la status page. Au premier
+        # poll — déploiement neuf, ou Redis vidé — `hm:bs:seen_updates` est vide
+        # et chaque update d'archive passe pour nouveau : sans amorçage, le
+        # monitor adopte un incident résolu il y a des mois et le rejoue.
+        bootstrap = not await self._store.get(keys.BS_CURSOR)
+        if bootstrap:
+            log.info("premier poll Better Stack : l'historique est pris pour acquis")
+
         for report in snapshot.reports:
             updates = [
                 {"id": u["id"], "message": u["message"], "at": u.get("published_at")}
@@ -433,14 +461,45 @@ class IncidentManager:
             ]
             if not updates:
                 continue
+            stale = bootstrap or self._too_old_to_adopt(report, updates)
             await process_report(
                 self._bs,
                 report,
                 updates,
-                on_owned_update=self._relay_update,
-                on_foreign_incident=self._adopt,
+                # Un report trop vieux n'est que marqué vu : on ne le rejoue pas,
+                # mais on ne le reverra pas non plus au poll suivant.
+                on_owned_update=_ignore if stale else self._relay_update,
+                on_foreign_incident=_ignore if stale else self._adopt,
             )
         await self._store.set(keys.BS_CURSOR, iso())
+
+    def _too_old_to_adopt(self, report: dict, updates: list[dict]) -> bool:
+        """Un incident dont le dernier mot remonte à des heures est de l'archive.
+
+        `ends_at` reste `null` même sur un report résolu : impossible de s'y
+        fier pour savoir s'il est clos. L'âge du dernier update, lui, ne ment
+        pas.
+        """
+        # L'ordre des updates d'`index.json` n'est pas garanti : on prend le plus
+        # récent, pas le dernier de la liste.
+        ages = [
+            age
+            for age in (age_seconds(u.get("at")) for u in updates)
+            if age is not None
+        ]
+        if not ages:
+            ages = [age] if (age := age_seconds(report.get("updated_at"))) is not None else []
+        if not ages:
+            return True
+        age = min(ages)
+        if age > self._s.hm_bs_adopt_max_age:
+            log.info(
+                "report Better Stack %s ignoré : dernier update il y a %ds",
+                report.get("id"),
+                int(age),
+            )
+            return True
+        return False
 
     async def _relay_update(self, report: dict, update: dict) -> None:
         """Un update posté à la main sur *notre* incident : on le relaie."""
@@ -528,6 +587,25 @@ def _auto_message(
         # Nommer les dégâts collatéraux plutôt que de les mélanger à la cause.
         message += f" {_names(collateral, settings)} may be degraded as a result."
     return message
+
+
+async def _ignore(report: dict, update: dict) -> None:
+    """Marquer vu sans rien faire — voir `reconcile_betterstack`."""
+    return None
+
+
+def _is_noop_update(
+    incident: dict, message: str, level: str | None, affected: list[str] | None
+) -> bool:
+    """Le même texte, le même niveau, les mêmes services : rien à publier."""
+    updates = incident.get("updates") or []
+    if not updates or updates[-1].get("message") != message:
+        return False
+    if level and level != incident.get("level"):
+        return False
+    if affected is not None and list(affected) != list(incident.get("affected") or []):
+        return False
+    return True
 
 
 def _normalize_update(update: dict) -> dict:

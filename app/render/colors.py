@@ -41,8 +41,12 @@ HEX_BY_LEVEL: dict[str, str] = {
     OPERATIONAL: "#57F287",
 }
 
-EMOJI_ONGOING = "<:error_circle_white:1534635025629319419>"
-EMOJI_RESOLVED = "<:verified2:1495440135163084870>"
+# Trois icônes, pas une de plus : le rendu doit rester sobre, et ces émojis
+# doivent être uploadés en *application emojis* sur l'application Health
+# Monitor — sinon le chemin webhook les rend cassés.
+EMOJI_ONGOING = "<:error:1541616427197530203>"
+EMOJI_RESOLVED = "<:check_circle:1541616428657016926>"
+EMOJI_PENDING = "<a:spinner:1541617132104843264>"
 
 # États de ressource Better Stack
 BS_RESOLVED = "resolved"

@@ -205,3 +205,135 @@ async def test_history_is_capped(manager, store):
         await store.rpush(keys.INCIDENT_HISTORY, f'{{"id":"inc_{index}"}}')
     await store.ltrim(keys.INCIDENT_HISTORY, -2, -1)
     assert [i["id"] for i in await manager.history()] == ["inc_2", "inc_1"]
+
+
+# ----------------------------------------------------------------------
+# Régressions observées en production (déploiement du 2026-08-25)
+# ----------------------------------------------------------------------
+async def test_a_stable_outage_stops_producing_updates(manager, snapshot, notifier):
+    """Un état qui ne bouge pas ne produit qu'un seul message.
+
+    En production, un incident adopté depuis Better Stack prenait un update
+    toutes les 15 secondes : son niveau n'étant jamais réécrit, la garde de
+    sortie de `reconcile` ne se refermait pas.
+    """
+    down = {"moddy-bot": DOWN, "moddy-api": DOWN}
+    for _ in range(10):
+        await manager.reconcile(snapshot(colors.MAJOR_OUTAGE, down))
+
+    assert len((await manager.get_active())["updates"]) == 1
+
+
+async def test_an_adopted_incident_stops_producing_updates(manager, snapshot, store):
+    """Le cas exact de la production : incident ouvert ailleurs, panne stable."""
+    await manager.open(
+        title="Billing issue",
+        message="...",
+        level=colors.PARTIAL_OUTAGE,
+        affected=[],
+        origin="betterstack",
+        bs_report_id="995593",
+    )
+    down = {"moddy-bot": DOWN, "moddy-api": DOWN}
+    for _ in range(10):
+        await manager.reconcile(snapshot(colors.MAJOR_OUTAGE, down))
+
+    incident = await manager.get_active()
+    # Un seul update : celui qui apporte réellement les services affectés.
+    assert len(incident["updates"]) == 2
+    # Le niveau d'un incident ouvert ailleurs n'est pas réécrit par la détection.
+    assert incident["level"] == colors.PARTIAL_OUTAGE
+
+
+async def test_the_rate_limit_covers_updates_without_a_new_service(manager, snapshot, notifier):
+    """Sans service de plus, l'update passait sans consulter le rate-limit."""
+    notifier.allowed = False
+    await manager.open(
+        title="Ouvert à la main",
+        message="...",
+        level=colors.PARTIAL_OUTAGE,
+        affected=["moddy-bot", "moddy-api", "moddy-website", "moddy-dashboard"],
+        origin="discord",
+    )
+    await manager.reconcile(
+        snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": DOWN, "moddy-api": DOWN})
+    )
+    assert len((await manager.get_active())["updates"]) == 1
+
+
+async def test_a_staff_update_is_never_deduplicated(manager):
+    """Le staff a le droit de répéter : la garde ne vaut que pour l'automatique."""
+    await manager.open(
+        title="A", message="m", level=colors.PARTIAL_OUTAGE, affected=["moddy-api"], origin="discord"
+    )
+    await manager.add_update(message="m", author="Jules")
+    await manager.add_update(message="m", author="Jules")
+    assert len((await manager.get_active())["updates"]) == 3
+
+
+class StubIndex:
+    """Doublure de `poll_index` : `index.json` porte tout l'historique."""
+
+    def __init__(self, reports: list[dict]) -> None:
+        self.reports = reports
+        self.resources: dict = {}
+        self.aggregate_state = "operational"
+        self.calls = 0
+
+    async def __call__(self):
+        self.calls += 1
+        return self
+
+
+def report(report_id: str, *, message: str, at: str) -> dict:
+    return {
+        "id": report_id,
+        "title": "Billing issue",
+        "report_type": "manual",
+        "updated_at": at,
+        "updates": [{"id": f"u{report_id}", "message": message, "published_at": at}],
+    }
+
+
+@pytest.fixture
+def polling(settings, store, notifier):
+    """Un manager dont le poll Better Stack sert un `index.json` fabriqué."""
+
+    def _polling(reports: list[dict]) -> IncidentManager:
+        bs = BetterStack(settings, store)
+        bs.poll_index = StubIndex(reports)
+        return IncidentManager(settings, store, bs, notifier)
+
+    return _polling
+
+
+async def test_the_first_poll_takes_the_history_for_granted(polling):
+    """Le bug de production : un incident résolu en archive, rejoué au démarrage.
+
+    `index.json` porte tout l'historique de la status page. Au premier poll,
+    `hm:bs:seen_updates` est vide et chaque update d'archive passe pour neuf.
+    """
+    manager = polling([report("995593", message="Fully restored.", at=iso())])
+
+    await manager.reconcile_betterstack()
+    assert await manager.get_active() is None
+
+
+async def test_an_archived_report_is_never_adopted(polling, store):
+    """`ends_at` reste `null` même résolu : c'est l'âge du dernier mot qui tranche."""
+    await store.set(keys.BS_CURSOR, iso())  # le poll d'amorçage a déjà eu lieu
+    manager = polling([report("995593", message="Restored.", at="2026-01-01T00:00:00Z")])
+
+    await manager.reconcile_betterstack()
+    assert await manager.get_active() is None
+
+
+async def test_a_fresh_foreign_incident_is_still_adopted(polling, store):
+    await store.set(keys.BS_CURSOR, iso())
+    manager = polling([report("1019848", message="We are investigating.", at=iso())])
+
+    await manager.reconcile_betterstack()
+    incident = await manager.get_active()
+    assert incident is not None
+    assert incident["origin"] == "betterstack"
+    assert incident["bs_report_id"] == "1019848"

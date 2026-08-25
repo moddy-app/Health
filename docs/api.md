@@ -3,7 +3,6 @@
 | Route | Auth | Réponse |
 |---|---|---|
 | `POST /ingest/heartbeat` | `X-Health-Token` | 200 / 401 / 503 |
-| `POST /ingest/command` | `X-Health-Token` | 200 / 401 / 503 |
 | `POST /ingest/betterstack` | `?k=<secret>` | 202 / 204 / 403 |
 | `GET /v1/status` | — | 200 / 429 |
 | `GET /v1/status/banner` | — | 200 / 429 |
@@ -27,29 +26,6 @@ Voir [heartbeat.md](heartbeat.md) pour le contrat complet.
 | `401` | Token absent ou invalide |
 | `503` | `HM_INGEST_TOKEN` non configuré côté monitor |
 | `422` | Corps invalide (`service` manquant) |
-
----
-
-## `POST /ingest/command`
-
-Repli du bot quand Redis est down. Même contrat que le pubsub
-`moddy:hm:command`.
-
-```json
-{ "action": "incident.create",
-  "payload": { "title": "...", "message": "...", "level": "partial_outage",
-               "affected": ["moddy-api"], "notify": false, "author": "Jules" } }
-```
-
-Réponse immédiate, exécution en tâche de fond :
-
-```json
-{ "ok": true, "action": "incident.create" }
-```
-
-Actions reconnues : `incident.create`, `incident.update`, `incident.resolve`,
-`maintenance.create`. Une action inconnue est loguée et ignorée — la réponse
-reste `200`, le traitement étant asynchrone.
 
 ---
 

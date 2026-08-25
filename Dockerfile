@@ -15,6 +15,8 @@ COPY app ./app
 ENV PORT=8080
 EXPOSE 8080
 
-# Un seul worker : l'état de détection vit dans le process, la persistance est
-# dans Redis. Deux workers doubleraient les boucles de check et les alertes.
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 1"]
+# `python -m app.main` et non `uvicorn` : le bot Discord tourne dans la même
+# event loop que le serveur, et la CLI uvicorn ne lancerait que le serveur.
+# Un seul process de toute façon — l'état de détection y vit, deux workers
+# doubleraient les boucles de check et les alertes.
+CMD ["python", "-m", "app.main"]

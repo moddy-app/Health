@@ -104,35 +104,47 @@ def status_summary(s: StatusPresentation) -> str:
     return "\n".join(lines)
 
 
-# Une marque gauche-à-droite : un caractère invisible qui compte quand même.
-# Discord avale une ligne réellement vide — et un `-#` sans rien derrière n'est
-# pas rendu du tout — donc le bloc rétrécirait en attendant.
-BLANK = "\u200e"
+# Un horodatage Discord est rendu en clair (« 3 seconds ago ») : sa largeur
+# finale n'est pas celle de la balise, on la tient pour acquise.
+TIMESTAMP_WIDTH = 13
 
 
-def _blanked(lines: list[str], head: str) -> str:
-    """Le même bloc, vidé de ses faits : autant de lignes, aucune information.
+def pending(value: str, *, revealed: bool, width: int | None = None) -> str:
+    """La valeur, ou des tirets de sa largeur tant qu'elle n'est pas révélée.
 
-    Le panneau doit mesurer la même chose en chargement qu'une fois rempli —
-    sinon le message grandit sous le curseur à chaque révélation, et ce qu'on
-    lisait a bougé de place.
+    Le panneau garde ainsi sa forme *et* ses dimensions pendant le chargement :
+    les mots fixes restent lisibles, seule l'information à venir est masquée.
+    Un message qui grandit sous le curseur déplace ce qu'on était en train de
+    lire.
     """
-    return "\n".join([head, *(f"-# {BLANK}" for _ in lines[1:])])
+    if revealed:
+        return value
+    return "-" * max(width or len(value), 1)
 
 
 def status_header(s: StatusPresentation, *, revealed: bool = True) -> str:
     """En-tête du panneau de détail : le niveau global et rien d'autre.
 
-    Tant que tous les services ne sont pas révélés, l'en-tête garde sa forme
-    mais ne dit rien : annoncer « All Systems Operational » avant d'avoir
-    affiché le premier service serait donner la réponse avant la question.
+    Tant que tous les services ne sont pas révélés, l'en-tête ne conclut rien :
+    annoncer « All Systems Operational » avant d'avoir affiché le premier
+    service serait donner la réponse avant la question.
     """
-    lines = [f"### {s.emoji} {s.headline}", f"-# Last updated <t:{s.timestamp}:R>"]
+    icon = s.emoji if revealed else theme.EMOJI_LOADING
+    headline = s.headline if revealed else "Loading"
+    lines = [
+        f"### {icon} {headline}",
+        "-# Last updated "
+        + pending(f"<t:{s.timestamp}:R>", revealed=revealed, width=TIMESTAMP_WIDTH),
+    ]
     if s.incident_title:
-        title = f"[{s.incident_title}]({s.incident_url})" if s.incident_url else s.incident_title
-        lines.append(f"{theme.EMOJI_ONGOING} **{title}**")
-    if not revealed:
-        return _blanked(lines, f"### {theme.EMOJI_LOADING} {BLANK}")
+        if revealed:
+            link = f"[{s.incident_title}]({s.incident_url})" if s.incident_url else s.incident_title
+            lines.append(f"{theme.EMOJI_ONGOING} **{link}**")
+        else:
+            # Le titre masqué, pas le lien : l'URL ne s'affiche jamais, elle ne
+            # doit pas compter dans la largeur.
+            masked = pending(s.incident_title, revealed=False)
+            lines.append(f"{theme.EMOJI_LOADING} **{masked}**")
     return "\n".join(lines)
 
 
@@ -171,33 +183,41 @@ def service_detail(service, hb: dict, *, revealed: bool = True) -> str:
     """Le bloc d'un service : état, puis les faits qui l'expliquent.
 
     C'est l'outil de diagnostic rapide pendant une crise — version, uptime,
-    dernier heartbeat, checks en échec. Tant qu'il n'est pas révélé, le service
-    ne montre que son nom : pas d'icône d'état, pas de fait à moitié lu.
+    dernier heartbeat, checks en échec. Tant qu'il n'est pas révélé, le bloc
+    garde tout ce qui ne change pas — son nom, les mots `up`, `heartbeat` — et
+    remplace par des tirets ce qui va s'afficher, à la largeur que ça prendra.
     """
+    def hidden(value: str, width: int | None = None) -> str:
+        return pending(value, revealed=revealed, width=width)
+
     facts = []
     if hb.get("version"):
-        facts.append(f"`{hb['version']}`")
+        facts.append(f"`{hidden(str(hb['version']))}`")
     uptime = hb.get("uptime_s")
     if uptime is not None:
-        facts.append(f"up {int(uptime) // 3600}h{(int(uptime) % 3600) // 60:02d}")
+        facts.append(
+            "up " + hidden(f"{int(uptime) // 3600}h{(int(uptime) % 3600) // 60:02d}")
+        )
     received = hb.get("received_at")
     # Un timestamp Discord plutôt qu'un âge calculé : le panneau reste juste
     # même quand il reste affiché plusieurs minutes, et chacun le lit dans son
     # fuseau.
-    facts.append(f"heartbeat <t:{unix(received)}:R>" if received else "no heartbeat")
+    if received:
+        facts.append("heartbeat " + hidden(f"<t:{unix(received)}:R>", TIMESTAMP_WIDTH))
+    else:
+        facts.append(hidden("no heartbeat"))
     if service.impacted_by:
-        facts.append("impacted by " + ", ".join(service.impacted_by))
+        facts.append("impacted by " + hidden(", ".join(service.impacted_by)))
 
-    lines = [f"{theme.service_icon(service.status)} **{service.name}** · {service.label}"]
+    icon = theme.service_icon(service.status) if revealed else theme.EMOJI_LOADING
+    lines = [f"{icon} **{service.name}** · {hidden(service.label)}"]
     lines.append("-# " + " · ".join(facts))
     summary = check_summary(hb.get("checks") or {})
     if summary:
-        lines.append(f"-# {summary}")
+        # L'icône du résumé dit déjà si ça passe ou non : elle attend son tour.
+        icon, _, rest = summary.partition(" ")
+        lines.append(f"-# {icon if revealed else theme.EMOJI_LOADING} {hidden(rest)}")
 
-    if not revealed:
-        # Même structure qu'une fois révélé : l'icône devient un spinner, les
-        # faits laissent leur place blanche, et le bloc garde sa hauteur.
-        return _blanked(lines, f"{theme.EMOJI_LOADING} **{service.name}** · {BLANK}")
     return "\n".join(lines)
 
 

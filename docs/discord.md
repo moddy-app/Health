@@ -354,35 +354,27 @@ Le bouton `Details` est bleu et porte `<:info:1541808220610363423>` ; le
 sont des icônes de bouton : elles n'apparaissent jamais dans du texte.
 
 **Le panneau se remplit sous les yeux.** À l'ouverture comme au refresh, il
-part avec sa structure définitive — mêmes lignes, mêmes séparateurs — mais les
-icônes remplacées par le spinner et les faits laissés blancs :
+part avec sa structure définitive : mêmes lignes, mêmes séparateurs, mêmes
+mots. Seules les valeurs à venir sont masquées, par des tirets à la largeur
+qu'elles prendront, et les icônes d'état laissent leur place au spinner :
 
 ```
-### <a:spinner:...> ​
--# ​
+### <a:spinner:...> Loading
+-# Last updated -------------
 ──────────────────────────
-<a:spinner:...> **Moddy Bot** · ​
--# ​
-──────────────────────────
-<a:spinner:...> **API** · ​
--# ​
+<a:spinner:...> **Moddy Bot** · -----------
+-# `-----` · up ---- · heartbeat -------------
+-# <a:spinner:...> ----------------
 ```
 
-Chaque bloc garde **exactement** le nombre de lignes qu'il aura une fois
-rempli : le message mesure la même chose en chargement qu'à l'arrivée, sinon il
+Le message mesure donc la même chose en chargement qu'à l'arrivée — sinon il
 grandit sous le curseur à chaque révélation et ce qu'on lisait a bougé de
-place. Le blanc est une marque gauche-à-droite (`U+200E`) — Discord avale une
-ligne réellement vide, et un `-#` sans rien derrière n'est pas rendu du tout.
+place. Deux largeurs ne sont pas déductibles et sont tenues pour acquises : un
+horodatage Discord, rendu en clair (« 3 seconds ago »), et le lien d'un
+incident, dont l'URL ne s'affiche pas.
 
-Chaque service se révèle après son propre délai (0 à 2 s), donc l'ordre
-d'arrivée change à chaque fois. L'en-tête et le
-liseré arrivent en dernier — annoncer « All Systems Operational » avant
-d'avoir montré le premier service reviendrait à donner la réponse avant la
-question. Une édition qui échoue (éphémère fermé, token expiré) arrête la
-révélation sans rien casser.
-
-**L'âge du heartbeat est un timestamp Discord** (`<t:...:R>`), pas un âge
-calculé : un panneau éphémère reste ouvert, et « 2s ago » vieillit à l'écran.
+Chaque service se révèle après son propre délai (0 à 1,2 s), donc l'ordre
+d'arrivée change à chaque fois.
 
 **Les checks se résument, ils ne se dumpent pas.** Le panneau affichait
 `postgres: {'ok': True, 'latency_ms': 4} · redis: {...}` — illisible. En régime

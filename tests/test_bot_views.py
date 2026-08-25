@@ -223,15 +223,30 @@ def test_the_buttons_carry_their_colour_and_icon():
     assert refresh["emoji"]["name"] == "refresh"
 
 
-def test_a_service_not_yet_revealed_shows_nothing_but_a_spinner():
+def test_a_service_not_yet_revealed_keeps_its_words_and_hides_its_values():
     snapshot = StatusPresentation.from_public(PUBLIC)
     heartbeats = {"moddy-bot": {"version": "1.4.2", "received_at": "2026-08-24T19:41:50Z"}}
     text = flatten(build_detail_view(snapshot, heartbeats, revealed=set()).to_components())
     assert colors.EMOJI_LOADING in text
-    assert "1.4.2" not in text
+    # Ce qui ne change pas reste lisible…
+    assert "**Moddy Bot**" in text and "heartbeat " in text and "Last updated" in text
+    # …et ce qui va s'afficher est masqué, à la largeur qu'il prendra.
+    assert "1.4.2" not in text and "`-----`" in text
     assert colors.EMOJI_OPERATIONAL not in text
     # L'en-tête ne conclut rien tant que rien n'est révélé.
+    assert "Loading" in text
     assert "All Systems Operational" not in text and "Degraded Performance" not in text
+
+
+def test_the_hidden_values_take_the_width_they_will_have():
+    """Des tirets plus courts que la valeur feraient s'élargir le message."""
+    from app.render.layout import service_detail
+
+    service = StatusPresentation.from_public(PUBLIC).services[0]
+    hb = {"version": "1.4.2", "uptime_s": 7300}
+    hidden = service_detail(service, hb, revealed=False).splitlines()
+    shown = service_detail(service, hb, revealed=True).splitlines()
+    assert len(hidden[1]) == len(shown[1])
 
 
 def test_the_last_reveal_restores_the_full_panel():

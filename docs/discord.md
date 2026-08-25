@@ -445,6 +445,7 @@ jusqu'à une heure à se propager, celui d'une guild est instantané.
 | `/status cancel` | Modal d'annulation de la maintenance active |
 | `/status check` | État détaillé (éphémère) |
 | `/status sticky` | Force le repost du sticky |
+| `/status reload` | Resynchronise les updates de l'incident actif depuis Better Stack |
 
 Le bot ne parle jamais à Better Stack : il appelle
 `IncidentManager.handle_command`, dans ce process. Toute la logique d'incident

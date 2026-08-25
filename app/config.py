@@ -135,7 +135,14 @@ class Settings(BaseSettings):
 
     # --- API publique ---
     hm_public_rate_limit: str = "60/minute"
-    hm_cors_origins: str = "https://moddy.app,https://dashboard.moddy.app"
+    # Tout sous-domaine de moddy.app est un module Moddy : dashboard, preview,
+    # www (`https://moddy.app` sans `www` redirige en 307 vers `www.moddy.app`,
+    # l'origine que le navigateur envoie réellement), un futur module. Ajouter
+    # un module ne doit pas redemander une modification de cette liste — d'où
+    # le motif, plutôt qu'une énumération condamnée à prendre du retard.
+    hm_cors_origin_regex: str = r"^https://([a-z0-9-]+\.)*moddy\.app$"
+    # Origines hors *.moddy.app, à ajouter au cas par cas.
+    hm_cors_origins: str = ""
     hm_public_cache_ttl: int = 30
 
     # ------------------------------------------------------------------

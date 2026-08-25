@@ -185,6 +185,33 @@ class Notifier:
         # --- Niveau 3 : l'appelant empile dans la file de rattrapage -----------
         return False
 
+    async def re_render(self, incident: dict) -> bool:
+        """Réédite le message d'incident tel quel — sans le filtre anti-doublon.
+
+        Sert au resync manuel des updates depuis Better Stack : leur contenu a
+        changé sous les pieds du dédoublonneur, qui ne compte que le nombre
+        d'updates (`_dedup_key`) et prendrait un texte corrigé pour un envoi
+        déjà fait. Édite sur le transport déjà propriétaire du message ; n'en
+        poste jamais un nouveau, et ne marque rien dans l'anti-doublon.
+        """
+        message_id = incident.get("discord_message_id")
+        transport = incident.get("discord_transport")
+        if not message_id or not transport:
+            return False
+
+        presentation = IncidentPresentation.from_incident(
+            incident,
+            self._s.service_names,
+            mentions=self._s.mention_line(incident.get("affected") or []),
+        )
+        if transport == "bot" and self._bot.enabled:
+            return await self._bot.edit(message_id, presentation)
+        if transport == "webhook" and self._webhook.enabled:
+            components = build_raw_components(presentation)
+            embed = build_raw_embed(presentation)
+            return await self._webhook.edit(message_id, components, embed, presentation.mentions)
+        return False
+
     # ------------------------------------------------------------------
     # File de rattrapage
     # ------------------------------------------------------------------

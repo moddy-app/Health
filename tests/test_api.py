@@ -284,3 +284,27 @@ def test_betterstack_webhook_rejects_a_bad_key(client):
 def test_the_bot_no_longer_has_an_http_command_route(client):
     """Le bot vit dans ce process : il appelle `handle_command` directement."""
     assert client.post("/ingest/command", json={}, headers=TOKEN).status_code == 404
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://moddy.app",
+        # `moddy.app` (sans `www`) répond 307 vers `www.moddy.app` : c'est
+        # cette origine que le navigateur envoie réellement.
+        "https://www.moddy.app",
+        "https://dashboard.moddy.app",
+        "https://preview.moddy.app",  # URL réelle du dashboard
+        # Un module qui n'existe pas encore aujourd'hui : le motif couvre tout
+        # sous-domaine de moddy.app sans qu'on ait à l'énumérer.
+        "https://some-future-module.moddy.app",
+    ],
+)
+def test_cors_allows_any_moddy_app_subdomain(client, origin):
+    response = client.get("/v1/status", headers={"Origin": origin})
+    assert response.headers["access-control-allow-origin"] == origin
+
+
+def test_cors_rejects_an_unrelated_origin(client):
+    response = client.get("/v1/status", headers={"Origin": "https://evil.example"})
+    assert "access-control-allow-origin" not in response.headers

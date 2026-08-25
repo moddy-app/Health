@@ -93,6 +93,34 @@ class StatusCommands(app_commands.Group):
             ephemeral=True,
         )
 
+    @app_commands.command(
+        name="reload", description="Reload the active incident's updates from Better Stack"
+    )
+    @staff_only()
+    async def reload(self, interaction: discord.Interaction) -> None:
+        if not await _require_active(interaction):
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        incident = await interaction.client.ctx.incidents.sync_updates()
+        if incident is None:
+            await interaction.followup.send(
+                view=_notice(
+                    f"{theme.EMOJI_ALERT} Nothing to reload — no Better Stack report yet.",
+                    colors.ACCENT_DEGRADED,
+                ),
+                ephemeral=True,
+            )
+            return
+        count = len(incident.get("updates") or [])
+        await interaction.followup.send(
+            view=_notice(
+                f"{theme.EMOJI_OK} Reloaded {count} update{'s' if count != 1 else ''} "
+                "from Better Stack.",
+                colors.ACCENT_RESOLVED,
+            ),
+            ephemeral=True,
+        )
+
 
 async def _require_active(interaction: discord.Interaction) -> bool:
     """`send_modal` ne s'annule pas : on vérifie *avant* de l'envoyer."""

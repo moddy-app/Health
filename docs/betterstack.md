@@ -174,6 +174,29 @@ Deux règles absolues :
 La déduplication par ID couvre aussi les livraisons multiples dues aux retries,
 que la doc Better Stack signale comme possibles.
 
+### L'amorçage du premier poll
+
+`index.json` porte **tout l'historique** de la status page, pas seulement les
+incidents en cours. Au premier poll — déploiement neuf, ou Redis vidé —
+`hm:bs:seen_updates` est vide : chaque update d'archive passe alors pour
+nouveau.
+
+Constaté en production : le monitor a adopté un incident de facturation résolu
+depuis des mois, en a rejoué les trois updates sur Discord, puis s'est mis à
+l'enrichir à chaque cycle de détection.
+
+Deux gardes, désormais :
+
+1. **Amorçage.** Tant que `hm:bs:cursor` est absent, le poll marque tout comme
+   vu sans rien traiter. Le monitor prend l'historique pour acquis et ne réagit
+   qu'à ce qui arrive ensuite. Le prix : un incident Better Stack déjà ouvert au
+   moment d'un redémarrage sans Redis n'est pas adopté. C'est le bon échange —
+   manquer une adoption coûte moins cher que rejouer une archive.
+2. **Âge.** Un report inconnu dont l'update le plus récent a plus de
+   `HM_BS_ADOPT_MAX_AGE` (1h) n'est jamais adopté. `ends_at` restant `null` même
+   sur un report résolu, l'âge du dernier mot est le seul indice fiable qu'un
+   incident est clos.
+
 Un update relayé vers Discord n'est **jamais** republié vers Better Stack
 (`publish_betterstack=False`) : il y existe déjà, le republier serait la boucle.
 

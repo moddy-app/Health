@@ -114,6 +114,7 @@ reçoit rien (le pubsub passe par Redis).
 | `HM_BS_RESOURCE_MAP` | — | `service:resource_id`, séparés par `,` |
 | `HM_SELF_HEARTBEAT_URL` | — | URL de ping ; vide ⇒ boucle non démarrée |
 | `HM_SELF_HEARTBEAT_INTERVAL` | `60` | Période du ping |
+| `HM_BS_ADOPT_MAX_AGE` | `3600` | Au-delà, un incident Better Stack inconnu est de l'archive et n'est pas adopté |
 | `HM_BS_WEBHOOK_SILENCE_ALERT` | `86400` | Silence au-delà duquel la souscription est jugée coupée |
 
 L'écriture n'est active que si `BETTERSTACK_TOKEN` **et**

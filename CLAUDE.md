@@ -17,7 +17,7 @@ JSON public au dashboard.
 ```bash
 python -m app.main                            # lancer (API + bot ; REDIS_URL vide = mémoire seule)
 uvicorn app.main:app --reload --port 8080     # API seule, sans bot
-pytest                                        # 144 tests, ~3s
+pytest                                        # 151 tests, ~3s
 python -m pyflakes app examples tests         # lint
 ```
 
@@ -98,6 +98,13 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
   écritures.
 - **Le rate-limit se remet à zéro à la reprise d'un service**, sinon toute
   résolution ouvre un angle mort de 5 minutes.
+- **`index.json` porte tout l'historique.** Au premier poll, `hm:bs:seen_updates`
+  est vide et chaque update d'archive passe pour neuf : sans amorçage, le
+  monitor adopte un incident résolu il y a des mois et le rejoue. Voir
+  `reconcile_betterstack`.
+- **Un incident non-`auto` ne voit jamais son niveau réécrit.** Comparer le
+  niveau *observé* au sien rouvre la garde de sortie de `reconcile` à chaque
+  cycle : un update toutes les 15 secondes.
 - **Une sonde en échec écrit un heartbeat `down`**, elle ne se contente pas de ne
   rien écrire : sinon la détection attend l'expiration du TTL.
 

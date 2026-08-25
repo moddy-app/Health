@@ -93,6 +93,10 @@ class Settings(BaseSettings):
     # Alerte si la souscription webhook semble coupée (10 échecs = désactivation
     # silencieuse côté Better Stack).
     hm_bs_webhook_silence_alert: int = 86_400
+    # Au-delà de cet âge, un incident Better Stack inconnu est de l'archive : on
+    # ne l'adopte pas. `ends_at` étant toujours `null`, l'âge du dernier update
+    # est le seul indice fiable qu'un report est clos.
+    hm_bs_adopt_max_age: int = 3_600
 
     # --- Discord ---
     # Application dédiée : token distinct de celui du bot Moddy, pour que le

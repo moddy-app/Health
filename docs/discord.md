@@ -374,7 +374,7 @@ grandit sous le curseur à chaque révélation et ce qu'on lisait a bougé de
 place. Le blanc est une marque gauche-à-droite (`U+200E`) — Discord avale une
 ligne réellement vide, et un `-#` sans rien derrière n'est pas rendu du tout.
 
-Chaque service se révèle après son propre délai (0,3 à 1 s), donc l'ordre
+Chaque service se révèle après son propre délai (0 à 2 s), donc l'ordre
 d'arrivée change à chaque fois. L'en-tête et le
 liseré arrivent en dernier — annoncer « All Systems Operational » avant
 d'avoir montré le premier service reviendrait à donner la réponse avant la

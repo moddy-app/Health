@@ -316,6 +316,43 @@ def test_unselected_services_are_reported_as_degraded():
     assert severity.statuses_for({"affected": ["moddy-api"]}) == {"moddy-api": "down"}
 
 
+def test_a_degraded_incident_opens_the_panel_with_nothing_marked_down():
+    """Choisir « Degraded Performance » au modal ne doit pas afficher « Down »."""
+    draft = {"affected": ["moddy-bot", "moddy-api"], "level": colors.DEGRADED}
+    assert severity.statuses_for(draft) == {"moddy-bot": "degraded", "moddy-api": "degraded"}
+    # Tout autre niveau garde le comportement d'origine : tout est down.
+    outage = {"affected": ["moddy-bot"], "level": colors.MAJOR_OUTAGE}
+    assert severity.statuses_for(outage) == {"moddy-bot": "down"}
+
+
+def test_an_incident_can_be_published_without_a_single_service_down():
+    """Tout décocher est un choix : un incident 100 % `degraded` est légitime."""
+    draft = {"affected": ["moddy-bot", "moddy-api"], "down": []}
+    assert severity.statuses_for(draft) == {"moddy-bot": "degraded", "moddy-api": "degraded"}
+    # Et le panneau doit se rouvrir sans rien de coché, sinon le choix est perdu.
+    view = severity.SeverityView(draft, Settings(redis_url="", hm_services="moddy-bot,moddy-api"))
+    assert not [option for option in _down_options(view) if option.default]
+
+
+def _down_options(view):
+    for item in view.walk_children():
+        if isinstance(item, severity.DownSelect):
+            return item.options
+    raise AssertionError("pas de DownSelect dans la vue")
+
+
+async def test_unchecking_every_service_survives_the_round_trip(bot_ctx):
+    """Le callback du select doit écrire une liste vide, pas retomber sur tout."""
+    await severity.save_draft(bot_ctx, 7, {"affected": ["moddy-bot", "moddy-api"]})
+    select = severity.DownSelect()  # aucune option cochée
+    assert list(select.values) == []
+    await select.callback(FakeInteraction(user_id=7, ctx=bot_ctx))
+
+    draft = await severity.load_draft(bot_ctx, 7)
+    assert draft["down"] == []
+    assert severity.statuses_for(draft) == {"moddy-bot": "degraded", "moddy-api": "degraded"}
+
+
 async def test_publishing_carries_the_per_service_statuses(bot_ctx):
     await severity.save_draft(
         bot_ctx,

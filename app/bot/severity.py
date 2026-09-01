@@ -10,6 +10,9 @@ D'où ce panneau éphémère, posté juste après le modal : il reprend les serv
 cochés et demande lesquels sont franchement down. Les autres sont publiés en
 `degraded`. Sans cette étape, tout service affecté partait en `downtime` sur la
 status page, y compris ceux qui ne faisaient que ralentir.
+
+Il s'ouvre déjà d'accord avec la sévérité saisie au modal — voir `down_set` —
+et se publie tel quel : ce que le panneau affiche est ce qui part.
 """
 
 from __future__ import annotations
@@ -45,9 +48,32 @@ async def load_draft(ctx, user_id: int | str) -> dict | None:
     return draft if isinstance(draft, dict) else None
 
 
+def down_set(draft: dict) -> set[str]:
+    """Les services franchement down d'un brouillon.
+
+    Une clé `down` absente vaut « pas encore choisi » : c'est la sévérité
+    saisie au modal qui décide alors — un incident annoncé « Degraded
+    Performance » ouvre le panneau avec tous ses services en `degraded`, tout
+    autre niveau les ouvre en `down`. Sans ça, le staff qui choisit `degraded`
+    voyait quand même « Down » partout et devait deviner qu'il fallait
+    décocher.
+
+    Une liste vide, elle, est un choix, pas une absence : un incident dont
+    aucun service n'est franchement down est légitime. Confondre les deux
+    (`down or affected`) republiait tout en `downtime` dès que la dernière
+    case était décochée, exactement ce que cette étape existe pour éviter.
+    """
+    down = draft.get("down")
+    if down is not None:
+        return set(down)
+    if draft.get("level") == colors.DEGRADED:
+        return set()
+    return set(draft.get("affected") or [])
+
+
 def statuses_for(draft: dict) -> dict[str, str]:
-    """L'état publié de chaque service affecté. Rien de coché = tout est down."""
-    down = set(draft.get("down") or draft.get("affected") or [])
+    """L'état publié de chaque service affecté."""
+    down = down_set(draft)
     return {
         service: (DOWN if service in down else DEGRADED)
         for service in draft.get("affected") or []
@@ -59,7 +85,10 @@ def _summary(draft: dict, settings) -> str:
     for service, status in statuses_for(draft).items():
         icon = theme.service_icon(status)
         lines.append(f"{icon} {settings.display_name(service)} · {theme.service_label(status)}")
-    lines.append("-# Pick the services that are fully down, then publish.")
+    lines.append(
+        "-# Ticked services are published as fully down, unticked ones as "
+        "degraded. Publish when the list above is right."
+    )
     return "\n".join(lines)
 
 
@@ -69,7 +98,7 @@ class DownSelect(ui.Select):
     def __init__(self, draft: dict | None = None, settings=None) -> None:
         options = []
         if draft and settings:
-            down = set(draft.get("down") or draft.get("affected") or [])
+            down = down_set(draft)
             options = [
                 discord.SelectOption(
                     label=settings.display_name(service),
@@ -80,7 +109,7 @@ class DownSelect(ui.Select):
             ]
         super().__init__(
             custom_id=DOWN_SELECT_ID,
-            placeholder="Services that are fully down",
+            placeholder="Fully down — untick a service to mark it degraded",
             options=options,
             min_values=0,
             max_values=max(len(options), 1),

@@ -167,3 +167,69 @@ async def test_public_payload_has_no_window_for_a_regular_incident(detector):
     payload = detector.public_payload(snapshot, incident)
     assert payload["incident"]["starts_at"] is None
     assert payload["incident"]["ends_at"] is None
+
+
+async def test_public_status_reflects_a_manual_incident_above_the_observed_level(
+    detector, store, settings
+):
+    """Un incident ouvert à la main l'emporte si les heartbeats disent moins grave.
+
+    `/status incident` peut annoncer `degraded` alors que le service se déclare
+    toujours `operational` : le bandeau du sticky ne doit pas dire « All systems
+    operational » juste au-dessus du titre de cet incident.
+    """
+    await _beat(store, settings, "moddy-bot", status="ok")
+    await _beat(store, settings, "moddy-api", status="ok")
+    await detector.run_cycle()
+    snapshot = await detector.run_cycle()
+    assert snapshot.level == colors.OPERATIONAL
+
+    incident = {
+        "id": "inc_3",
+        "type": "incident",
+        "level": colors.DEGRADED,
+        "title": "Degraded Performance",
+        "status": "open",
+        "updates": [],
+    }
+    payload = detector.public_payload(snapshot, incident)
+    assert payload["status"] == colors.DEGRADED
+
+
+async def test_public_status_keeps_the_observed_level_when_more_severe(
+    detector, store, settings
+):
+    """L'incident manuel ne peut pas *baisser* la sévérité affichée."""
+    for _ in range(3):
+        await _beat(store, settings, "moddy-bot", status="down")
+        await _beat(store, settings, "moddy-api", status="down")
+        snapshot = await detector.run_cycle()
+    assert snapshot.level == colors.MAJOR_OUTAGE
+
+    incident = {
+        "id": "inc_4",
+        "type": "incident",
+        "level": colors.DEGRADED,
+        "title": "Degraded Performance",
+        "status": "open",
+        "updates": [],
+    }
+    payload = detector.public_payload(snapshot, incident)
+    assert payload["status"] == colors.MAJOR_OUTAGE
+
+
+async def test_public_status_ignores_maintenance_level(detector, settings, store):
+    """Une maintenance n'a jamais à faire monter le niveau agrégé (§ docs/incidents.md)."""
+    snapshot = detector.current_snapshot()
+    incident = {
+        "id": "inc_5",
+        "type": "maintenance",
+        "level": colors.MAINTENANCE,
+        "title": "Scheduled Maintenance",
+        "status": "open",
+        "starts_at": "2020-01-01T00:00:00Z",
+        "ends_at": "2020-01-01T04:00:00Z",
+        "updates": [],
+    }
+    payload = detector.public_payload(snapshot, incident)
+    assert payload["status"] == colors.OPERATIONAL

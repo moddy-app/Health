@@ -179,6 +179,19 @@ au moins `degraded` quand la propagation parle.
 Le `degraded` ne crée **pas** d'incident sur la status page — voir
 [incidents.md](incidents.md#degraded-nest-pas-public).
 
+### Un incident manuel relève le niveau public, jamais ne l'abaisse
+
+`aggregate()` ne connaît que les heartbeats. Un incident ouvert à la main
+(`/status incident`) peut annoncer un niveau plus grave que ce que les
+services déclarent d'eux-mêmes — le bot reste joignable alors que le staff
+sait déjà qu'il rame. `Detector.public_payload()` publie alors le plus sévère
+des deux (`colors.SEVERITY_ORDER`), sinon le bandeau du sticky dirait « All
+Systems Operational » juste au-dessus du titre de l'incident en cours. Un
+incident manuel *moins* sévère que l'observé, lui, ne redescend jamais le
+niveau : la panne réelle prime. Une maintenance n'entre pas dans ce calcul —
+elle a sa propre clé (`maintenance`), voir
+[incidents.md](incidents.md#maintenances-planifiées).
+
 ## Le Snapshot
 
 `Detector.run_cycle()` renvoie un `Snapshot`, l'objet que consomme tout le reste.

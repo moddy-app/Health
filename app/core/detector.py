@@ -258,7 +258,7 @@ class Detector:
         ordered = self._s.display_order(list(snapshot.services))
 
         return {
-            "status": snapshot.level,
+            "status": _public_status(snapshot.level, active),
             "updated_at": snapshot.updated_at,
             "services": [
                 {
@@ -276,6 +276,23 @@ class Detector:
             "incident": _public_incident(active),
             "maintenance": _public_incident(maintenance),
         }
+
+
+def _public_status(observed: str, active: dict | None) -> str:
+    """Le niveau affiché ne peut pas être moins sévère que l'incident actif.
+
+    `aggregate()` ne connaît que les heartbeats : un incident ouvert à la main
+    (`/status incident`) peut annoncer `degraded` alors que le service se
+    déclare toujours `operational` de lui-même. Sans ce plancher, le bandeau
+    du sticky dirait « All systems operational » juste au-dessus du titre de
+    l'incident en cours — les deux lignes se contrediraient.
+    """
+    if not active:
+        return observed
+    level = active.get("level")
+    if level and colors.SEVERITY_ORDER.get(level, 0) > colors.SEVERITY_ORDER.get(observed, 0):
+        return level
+    return observed
 
 
 def _public_incident(incident: dict | None) -> dict | None:

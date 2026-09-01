@@ -316,6 +316,15 @@ def test_unselected_services_are_reported_as_degraded():
     assert severity.statuses_for({"affected": ["moddy-api"]}) == {"moddy-api": "down"}
 
 
+def test_a_degraded_incident_opens_the_panel_with_nothing_marked_down():
+    """Choisir « Degraded Performance » au modal ne doit pas afficher « Down »."""
+    draft = {"affected": ["moddy-bot", "moddy-api"], "level": colors.DEGRADED}
+    assert severity.statuses_for(draft) == {"moddy-bot": "degraded", "moddy-api": "degraded"}
+    # Tout autre niveau garde le comportement d'origine : tout est down.
+    outage = {"affected": ["moddy-bot"], "level": colors.MAJOR_OUTAGE}
+    assert severity.statuses_for(outage) == {"moddy-bot": "down"}
+
+
 def test_an_incident_can_be_published_without_a_single_service_down():
     """Tout décocher est un choix : un incident 100 % `degraded` est légitime."""
     draft = {"affected": ["moddy-bot", "moddy-api"], "down": []}

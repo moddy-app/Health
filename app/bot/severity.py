@@ -45,9 +45,25 @@ async def load_draft(ctx, user_id: int | str) -> dict | None:
     return draft if isinstance(draft, dict) else None
 
 
+def down_set(draft: dict) -> set[str]:
+    """Les services franchement down d'un brouillon.
+
+    Une clé `down` absente vaut « pas encore choisi » : tout est down, comme
+    avant l'étape de sévérité. Une liste vide est un choix, pas une absence —
+    un incident où tout est seulement `degraded` est légitime, et c'est même le
+    cas courant d'un ralentissement. Confondre les deux (`down or affected`)
+    republiait tout en `downtime` dès que le staff décochait la dernière case,
+    exactement ce que cette étape existe pour éviter.
+    """
+    down = draft.get("down")
+    if down is None:
+        return set(draft.get("affected") or [])
+    return set(down)
+
+
 def statuses_for(draft: dict) -> dict[str, str]:
-    """L'état publié de chaque service affecté. Rien de coché = tout est down."""
-    down = set(draft.get("down") or draft.get("affected") or [])
+    """L'état publié de chaque service affecté."""
+    down = down_set(draft)
     return {
         service: (DOWN if service in down else DEGRADED)
         for service in draft.get("affected") or []
@@ -59,7 +75,10 @@ def _summary(draft: dict, settings) -> str:
     for service, status in statuses_for(draft).items():
         icon = theme.service_icon(status)
         lines.append(f"{icon} {settings.display_name(service)} · {theme.service_label(status)}")
-    lines.append("-# Pick the services that are fully down, then publish.")
+    lines.append(
+        "-# Pick the services that are fully down, then publish. "
+        "Leave every box unchecked to report them all as degraded."
+    )
     return "\n".join(lines)
 
 
@@ -69,7 +88,7 @@ class DownSelect(ui.Select):
     def __init__(self, draft: dict | None = None, settings=None) -> None:
         options = []
         if draft and settings:
-            down = set(draft.get("down") or draft.get("affected") or [])
+            down = down_set(draft)
             options = [
                 discord.SelectOption(
                     label=settings.display_name(service),

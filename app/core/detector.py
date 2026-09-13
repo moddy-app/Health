@@ -226,19 +226,24 @@ class Detector:
         dérivé n'existe jamais sans qu'un `down` observé l'ait déclenché : la
         sévérité est donc déjà au moins `degraded` quand la propagation parle.
 
+        Un service franchement `down` vaut `partial_outage`, qu'il soit
+        critique ou non — `major_outage` reste réservé à la chute de *tous* les
+        services critiques. Le réserver aux seuls critiques annonçait « Degraded
+        Performance » en orange sur un service parti en vrille : le `down` prime
+        sur le `degraded`, c'est le plus grave qui parle.
+
         `unknown` n'entre pas dans le calcul : tant que les seuils ne sont pas
         atteints, un service jamais vu n'est pas encore une panne.
         """
         critical = set(self._s.critical_services)
         down = {s for s, st in self.states.items() if st.status == DOWN}
         degraded = {s for s, st in self.states.items() if st.status == DEGRADED}
-        critical_down = down & critical
 
-        if critical and critical_down == critical:
+        if critical and (down & critical) == critical:
             return colors.MAJOR_OUTAGE
-        if critical_down:
+        if down:
             return colors.PARTIAL_OUTAGE
-        if degraded or down:
+        if degraded:
             return colors.DEGRADED
         return colors.OPERATIONAL
 

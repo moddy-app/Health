@@ -163,13 +163,40 @@ class StatusPresentation:
     maintenance_affected: frozenset[str] = field(default_factory=frozenset)
 
     @property
+    def any_down(self) -> bool:
+        """Un service franchement tombé — maintenance exclue.
+
+        Un service couvert par une fenêtre de maintenance est l'objet de
+        l'opération, pas une panne : le compter ferait passer le sticky au
+        rouge sous une maintenance pourtant annoncée.
+        """
+        return any(
+            service.status == "down" and service.id not in self.maintenance_affected
+            for service in self.services
+        )
+
+    @property
+    def display_level(self) -> str:
+        """Le niveau tel qu'il s'affiche — icône et liseré.
+
+        Un service `down` ne se rend jamais en orange : c'est le plus grave qui
+        parle. La détection le dit déjà (`aggregate()`), mais un incident ouvert
+        à la main en `degraded` sur un service réellement tombé, lui, ne le dit
+        pas — et le bandeau annonçait alors moins grave que sa propre liste de
+        services.
+        """
+        outage = colors.SEVERITY_ORDER[colors.PARTIAL_OUTAGE]
+        if self.any_down and colors.SEVERITY_ORDER.get(self.level, 0) < outage:
+            return colors.PARTIAL_OUTAGE
+        return self.level
+
+    @property
     def headline(self) -> str:
-        any_down = any(service.status == "down" for service in self.services)
-        return theme.headline(self.level, any_down=any_down)
+        return theme.headline(self.level, any_down=self.any_down)
 
     @property
     def emoji(self) -> str:
-        return theme.level_icon(self.level)
+        return theme.level_icon(self.display_level)
 
     def icon_for(self, service: ServiceLine) -> str:
         """Icône d'un service dans la liste — la maintenance prime sur son état."""
@@ -179,7 +206,7 @@ class StatusPresentation:
 
     @property
     def accent(self) -> int:
-        return theme.accent(self.level, self.level == colors.OPERATIONAL)
+        return theme.accent(self.display_level, self.display_level == colors.OPERATIONAL)
 
     @property
     def timestamp(self) -> int:

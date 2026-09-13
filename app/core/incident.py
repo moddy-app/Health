@@ -36,6 +36,16 @@ def _type_for(level: str) -> str:
     return TYPE_DEGRADED if level == colors.DEGRADED else TYPE_INCIDENT
 
 
+def _is_incident(data: dict) -> bool:
+    """Un incident nu, plutôt qu'un dictionnaire `{id: incident}`.
+
+    Les deux sont des objets JSON : seule la forme les distingue. `updates` est
+    le marqueur le plus sûr — tout incident en porte au moins un, et une carte
+    d'incidents n'a que des ID en clés.
+    """
+    return isinstance(data.get("id"), str) and isinstance(data.get("updates"), list)
+
+
 def _bs_report_type(incident: dict) -> str:
     """Type du report Better Stack qui porte cet incident.
 
@@ -67,27 +77,36 @@ class IncidentManager:
     # ------------------------------------------------------------------
     # Persistance
     # ------------------------------------------------------------------
+    async def _load_active(self) -> dict[str, dict]:
+        """`{id: incident}`, en rattrapant l'ancien format au passage.
+
+        `hm:incident:active` a porté un incident **seul** tant qu'un seul
+        pouvait être actif. Lu tel quel comme un dictionnaire d'incidents, ses
+        propres champs passeraient pour des entrées et seraient tous écartés :
+        l'incident en cours au moment du déploiement disparaîtrait en silence —
+        constaté en production, sticky et commandes l'avaient oublié alors
+        qu'il vivait toujours sur Better Stack.
+        """
+        data = await self._store.get_json(keys.INCIDENT_ACTIVE)
+        if not isinstance(data, dict):
+            return {}
+        if _is_incident(data):
+            log.info("incident %s repris de l'ancien format de stockage", data.get("id"))
+            migrated = {str(data["id"]): data}
+            await self._store.set_json(keys.INCIDENT_ACTIVE, migrated)
+            return migrated
+        return {k: v for k, v in data.items() if isinstance(v, dict)}
+
     async def get_active_all(self) -> list[dict]:
         """Tous les incidents actifs, dans l'ordre où ils ont été ouverts."""
-        data = await self._store.get_json(keys.INCIDENT_ACTIVE)
-        if not isinstance(data, dict):
-            return []
-        return sorted(
-            (v for v in data.values() if isinstance(v, dict)),
-            key=lambda i: i.get("created_at") or "",
-        )
+        data = await self._load_active()
+        return sorted(data.values(), key=lambda i: i.get("created_at") or "")
 
     async def get_active(self, incident_id_: str) -> dict | None:
-        data = await self._store.get_json(keys.INCIDENT_ACTIVE)
-        if not isinstance(data, dict):
-            return None
-        incident = data.get(incident_id_)
-        return incident if isinstance(incident, dict) else None
+        return (await self._load_active()).get(incident_id_)
 
     async def _save(self, incident: dict) -> None:
-        data = await self._store.get_json(keys.INCIDENT_ACTIVE)
-        if not isinstance(data, dict):
-            data = {}
+        data = await self._load_active()
         data[incident["id"]] = incident
         await self._store.set_json(keys.INCIDENT_ACTIVE, data)
 
@@ -96,10 +115,9 @@ class IncidentManager:
             keys.INCIDENT_HISTORY, json.dumps(incident, separators=(",", ":"))
         )
         await self._store.ltrim(keys.INCIDENT_HISTORY, -keys.INCIDENT_HISTORY_MAX, -1)
-        data = await self._store.get_json(keys.INCIDENT_ACTIVE)
-        if isinstance(data, dict):
-            data.pop(incident["id"], None)
-            await self._store.set_json(keys.INCIDENT_ACTIVE, data)
+        data = await self._load_active()
+        data.pop(incident["id"], None)
+        await self._store.set_json(keys.INCIDENT_ACTIVE, data)
 
     async def history(self, limit: int = 20) -> list[dict]:
         raw = await self._store.lrange(keys.INCIDENT_HISTORY, -limit, -1)
@@ -194,6 +212,7 @@ class IncidentManager:
         url: str | None = None,
         fingerprint: str | None = None,
         roots: list[str] | None = None,
+        updates: list[dict] | None = None,
         publish_betterstack: bool = True,
     ) -> dict:
         now = iso()
@@ -220,7 +239,11 @@ class IncidentManager:
             "created_at": now,
             "resolved_at": None,
             "url": url or self._url_for(bs_report_id),
-            "updates": [{"kind": "created", "at": now, "message": message, "author": author}],
+            # Un incident adopté arrive avec son historique : le réduire à son
+            # dernier message ferait croire qu'il vient de commencer.
+            "updates": list(updates)
+            if updates
+            else [{"kind": "created", "at": now, "message": message, "author": author}],
             "state_fingerprint": fingerprint,
         }
         if starts_at:
@@ -620,6 +643,9 @@ class IncidentManager:
             "starts_at": node.get("starts_at"),
             "ends_at": node.get("ends_at"),
             "affected_resources": node.get("affected_resources") or [],
+            # Le webhook livre le fil complet : une adoption reprend tout
+            # l'historique, pas seulement l'update qui l'a déclenchée.
+            "updates": updates,
         }
         await process_report(
             self._bs,
@@ -652,22 +678,12 @@ class IncidentManager:
         synced: list[dict] = []
         for incident in actives:
             report = reports.get(str(incident.get("bs_report_id")))
-            updates = sorted(
-                (report.get("updates") or []) if report else [],
-                key=lambda u: u.get("published_at") or "",
-            )
-            if not updates:
+            history = _history_of(report) if report else []
+            if not history:
                 continue
 
-            incident["updates"] = [
-                {
-                    "kind": "created" if index == 0 else "updated",
-                    "at": update.get("published_at"),
-                    "message": update.get("message") or "",
-                    "author": "Better Stack",
-                }
-                for index, update in enumerate(updates)
-            ]
+            incident["updates"] = _as_updates(history)
+            self._resync_severity(incident, report, history[-1])
             await self._save(incident)
             if not await self._notifier.re_render(incident):
                 log.warning(
@@ -675,6 +691,36 @@ class IncidentManager:
                 )
             synced.append(incident)
         return synced
+
+    def _resync_severity(self, incident: dict, report: dict, latest: dict) -> None:
+        """Réaligne niveau et services affectés sur ce que dit Better Stack.
+
+        Le staff y corrige parfois l'état d'une ressource — `degraded` passé en
+        `downtime`. Recharger les seuls textes laissait alors le message Discord
+        annoncer « Degraded Performance » sous une ressource devenue `downtime`.
+
+        Sauf pour un incident d'origine `auto` : son niveau appartient à la
+        détection, qui le réécrit au cycle suivant depuis les heartbeats. Le
+        reprendre ici ne ferait qu'un aller-retour entre les deux.
+        """
+        if incident.get("origin") == "auto" or incident.get("type") == TYPE_MAINTENANCE:
+            return
+        affected, statuses = self._bs.services_for(
+            latest.get("affected_resources") or report.get("affected_resources") or []
+        )
+        if not affected:
+            return
+        level = _level_for(statuses)
+        if level != incident.get("level"):
+            log.info(
+                "resync %s : niveau %s -> %s d'après Better Stack",
+                incident.get("id"),
+                incident.get("level"),
+                level,
+            )
+        incident["level"] = level
+        incident["type"] = _type_for(level)
+        incident["affected"] = affected
 
     async def adopt_missing(self) -> list[dict]:
         """Rattrape tout incident Better Stack en cours que le monitor n'a pas chargé.
@@ -707,26 +753,14 @@ class IncidentManager:
             # `aggregate_state` qui tranche si ce report est encore actif.
             if str(report.get("aggregate_state") or "").lower() == "resolved":
                 continue
-            updates = sorted(
-                report.get("updates") or [], key=lambda u: u.get("published_at") or ""
-            )
-            if not updates:
+            history = _history_of(report)
+            if not history:
                 continue
 
-            last = updates[-1]
-            await self._adopt(
-                report,
-                {
-                    "message": last.get("message") or "",
-                    "affected_resources": last.get("affected_resources") or [],
-                },
-            )
-            # Marqués vus seulement maintenant : `process_report` les ignorait
-            # jusqu'ici sans jamais les avoir traités.
-            for update in updates:
-                update_id = str(update.get("id"))
-                if update_id and update_id != "None":
-                    await self._bs.mark_update_seen(update_id)
+            # `_adopt` reprend tout l'historique du report et marque chaque
+            # update vue — `process_report` les ignorait jusqu'ici sans jamais
+            # les avoir traitées.
+            await self._adopt(report, history[-1])
 
             newly = await self._find_by_report(report_id)
             if newly is not None:
@@ -838,17 +872,30 @@ class IncidentManager:
         # troisième origine distincte de manual/maintenance.
         is_maintenance = report.get("report_type") == "maintenance"
 
+        # Tout l'historique du report, pas seulement l'update qui a déclenché
+        # l'adoption : un incident ouvert depuis des heures qui n'arriverait
+        # ici qu'avec son dernier message se lirait comme s'il commençait.
+        history = _history_of(report) or [update]
+        latest = history[-1]
+
         # L'incident n'existe que côté Better Stack : ses services affectés sont
         # des ressources de status page, qu'il faut retraduire. Sans ça, le
         # message Discord annonçait « Affected services: — ».
         affected, statuses = self._bs.services_for(
-            update.get("affected_resources") or report.get("affected_resources") or []
+            latest.get("affected_resources") or report.get("affected_resources") or []
         )
         level = colors.MAINTENANCE if is_maintenance else _level_for(statuses)
 
+        # Les updates repris sont marqués vus ici, sinon `process_report`
+        # rappellerait `_relay_update` pour chacun et les empilerait en double.
+        for item in history:
+            update_id = str(item.get("id") or "")
+            if update_id and update_id != "None":
+                await self._bs.mark_update_seen(update_id)
+
         await self.open(
             title=report.get("title") or "Incident",
-            message=update.get("message") or "",
+            message=history[0].get("message") or "",
             level=level,
             affected=affected,
             origin="betterstack",
@@ -860,6 +907,7 @@ class IncidentManager:
             bs_report_type=TYPE_MAINTENANCE if is_maintenance else "manual",
             url=report.get("url") or self._url_for(report_id),
             statuses=statuses,
+            updates=_as_updates(history),
             # Le report existe déjà là-bas : lui renvoyer son propre message
             # ouvrirait une boucle.
             publish_betterstack=False,
@@ -918,23 +966,53 @@ async def _ignore(report: dict, update: dict) -> None:
     return None
 
 
+def _update_at(update: dict) -> str:
+    """L'horodatage d'une update, quelle que soit sa provenance.
+
+    Le webhook dit `at`, `index.json` dit `published_at` : les deux chemins se
+    rejoignent ici plutôt que dans chaque appelant.
+    """
+    return update.get("at") or update.get("published_at") or ""
+
+
+def _history_of(report: dict) -> list[dict]:
+    """Les updates d'un report, de la plus ancienne à la plus récente.
+
+    L'ordre d'`index.json` n'est pas garanti : on trie plutôt que de supposer.
+    """
+    return sorted(report.get("updates") or [], key=_update_at)
+
+
+def _as_updates(history: list[dict], author: str = "Better Stack") -> list[dict]:
+    """Historique Better Stack -> updates d'incident local."""
+    return [
+        {
+            "kind": "created" if index == 0 else "updated",
+            "at": _update_at(update) or iso(),
+            "message": update.get("message") or "",
+            "author": author,
+        }
+        for index, update in enumerate(history)
+    ]
+
+
 def _cluster_level(cluster: set[str], statuses: dict[str, str], critical: list[str]) -> str:
     """Sévérité d'un groupe de causes racines reliées entre elles.
 
     Reprend `Detector.aggregate()`, mais scopée au cluster : `major_outage`
-    n'est mérité que si le cluster couvre *tous* les services critiques,
-    `partial_outage` s'il n'en couvre qu'une partie.
+    n'est mérité que si le cluster couvre *tous* les services critiques ; un
+    service franchement `down`, critique ou non, vaut au moins
+    `partial_outage`.
     """
     critical_set = set(critical)
     down = {s for s in cluster if statuses.get(s) == DOWN}
     degraded = {s for s in cluster if statuses.get(s) == DEGRADED}
-    critical_down = down & critical_set
 
-    if critical_set and critical_down == critical_set:
+    if critical_set and (down & critical_set) == critical_set:
         return colors.MAJOR_OUTAGE
-    if critical_down:
+    if down:
         return colors.PARTIAL_OUTAGE
-    if degraded or down:
+    if degraded:
         return colors.DEGRADED
     return colors.OPERATIONAL
 

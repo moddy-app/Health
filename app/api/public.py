@@ -27,8 +27,8 @@ async def _payload(ctx: Context) -> dict:
     # Secours : au tout premier démarrage la boucle de check n'a pas encore
     # tourné, ou le cache a expiré pendant un cycle lent.
     snapshot = ctx.detector.current_snapshot()
-    incident = await ctx.incidents.get_active()
-    data = ctx.detector.public_payload(snapshot, incident)
+    incidents = await ctx.incidents.get_active_all()
+    data = ctx.detector.public_payload(snapshot, incidents)
     await ctx.store.set_json(keys.STATUS_PUBLIC, data, ttl=ctx.settings.hm_public_cache_ttl)
     return data
 

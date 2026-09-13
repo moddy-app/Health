@@ -1,8 +1,11 @@
 """Cycle de vie des incidents : ouverture, updates, résolution, historique.
 
-Un seul incident actif à la fois (`hm:incident:active`). Si un nouveau service
-tombe pendant un incident en cours, on met à jour l'incident existant plutôt
-que d'en créer un second.
+Plusieurs incidents peuvent être actifs à la fois (`hm:incident:active`, un
+dictionnaire `{id: incident}`). Un nouveau service qui tombe n'enrichit un
+incident existant que s'il lui est *relié* par le graphe d'impact
+(`HM_IMPACT_MAP`) ou explicitement cité dans ses services affectés : un
+service qui n'a rien à voir avec un incident en cours en ouvre un second,
+géré indépendamment.
 """
 
 from __future__ import annotations
@@ -16,7 +19,8 @@ from ..integrations.betterstack import BetterStack, process_report
 from ..render import colors
 from ..state import Store
 from ..util import age_seconds, incident_id, iso
-from .detector import DOWN, OPERATIONAL, Snapshot
+from .detector import DEGRADED, DOWN, OPERATIONAL, Snapshot
+from .impact import ImpactGraph
 from .notifier import Notifier
 
 log = logging.getLogger("hm.incident")
@@ -47,29 +51,55 @@ def _bs_report_type(incident: dict) -> str:
 
 class IncidentManager:
     def __init__(
-        self, settings: Settings, store: Store, betterstack: BetterStack, notifier: Notifier
+        self,
+        settings: Settings,
+        store: Store,
+        betterstack: BetterStack,
+        notifier: Notifier,
+        impact: ImpactGraph,
     ) -> None:
         self._s = settings
         self._store = store
         self._bs = betterstack
         self._notifier = notifier
+        self._impact = impact
 
     # ------------------------------------------------------------------
     # Persistance
     # ------------------------------------------------------------------
-    async def get_active(self) -> dict | None:
+    async def get_active_all(self) -> list[dict]:
+        """Tous les incidents actifs, dans l'ordre où ils ont été ouverts."""
         data = await self._store.get_json(keys.INCIDENT_ACTIVE)
-        return data if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            return []
+        return sorted(
+            (v for v in data.values() if isinstance(v, dict)),
+            key=lambda i: i.get("created_at") or "",
+        )
+
+    async def get_active(self, incident_id_: str) -> dict | None:
+        data = await self._store.get_json(keys.INCIDENT_ACTIVE)
+        if not isinstance(data, dict):
+            return None
+        incident = data.get(incident_id_)
+        return incident if isinstance(incident, dict) else None
 
     async def _save(self, incident: dict) -> None:
-        await self._store.set_json(keys.INCIDENT_ACTIVE, incident)
+        data = await self._store.get_json(keys.INCIDENT_ACTIVE)
+        if not isinstance(data, dict):
+            data = {}
+        data[incident["id"]] = incident
+        await self._store.set_json(keys.INCIDENT_ACTIVE, data)
 
     async def _archive(self, incident: dict) -> None:
         await self._store.rpush(
             keys.INCIDENT_HISTORY, json.dumps(incident, separators=(",", ":"))
         )
         await self._store.ltrim(keys.INCIDENT_HISTORY, -keys.INCIDENT_HISTORY_MAX, -1)
-        await self._store.delete(keys.INCIDENT_ACTIVE)
+        data = await self._store.get_json(keys.INCIDENT_ACTIVE)
+        if isinstance(data, dict):
+            data.pop(incident["id"], None)
+            await self._store.set_json(keys.INCIDENT_ACTIVE, data)
 
     async def history(self, limit: int = 20) -> list[dict]:
         raw = await self._store.lrange(keys.INCIDENT_HISTORY, -limit, -1)
@@ -163,6 +193,7 @@ class IncidentManager:
         bs_report_type: str | None = None,
         url: str | None = None,
         fingerprint: str | None = None,
+        roots: list[str] | None = None,
         publish_betterstack: bool = True,
     ) -> dict:
         now = iso()
@@ -179,6 +210,11 @@ class IncidentManager:
             "level": level,
             "origin": origin,
             "affected": list(affected),
+            # Causes racines suivies par la détection auto — sert à décider,
+            # cycle après cycle, si *cet* incident précis doit se résoudre.
+            # Vide pour un incident manuel ou Better Stack : lui ne se résout
+            # jamais tout seul.
+            "roots": list(roots) if roots is not None else [],
             "status": "open",
             "created_by": author,
             "created_at": now,
@@ -203,21 +239,23 @@ class IncidentManager:
 
     async def add_update(
         self,
+        incident_id_: str,
         *,
         message: str,
         author: str = MONITOR,
         kind: str = "updated",
         level: str | None = None,
         affected: list[str] | None = None,
+        roots: list[str] | None = None,
         notify: bool = False,
         statuses: dict[str, str] | None = None,
         publish_betterstack: bool = True,
         dedupe: bool = False,
         fingerprint: str | None = None,
     ) -> dict | None:
-        incident = await self.get_active()
+        incident = await self.get_active(incident_id_)
         if incident is None:
-            log.warning("update demandé sans incident actif")
+            log.warning("update demandé sur un incident %s introuvable", incident_id_)
             return None
 
         # Un update automatique qui ne dit rien de neuf n'en est pas un : sans
@@ -235,6 +273,8 @@ class IncidentManager:
                 incident["type"] = _type_for(level)
         if affected is not None:
             incident["affected"] = list(affected)
+        if roots is not None:
+            incident["roots"] = list(roots)
 
         incident["status"] = "updating"
         if fingerprint is not None:
@@ -254,13 +294,14 @@ class IncidentManager:
 
     async def resolve(
         self,
+        incident_id_: str,
         *,
         message: str,
         author: str = MONITOR,
         notify: bool = False,
         publish_betterstack: bool = True,
     ) -> dict | None:
-        incident = await self.get_active()
+        incident = await self.get_active(incident_id_)
         if incident is None:
             return None
 
@@ -318,7 +359,13 @@ class IncidentManager:
     # Détection automatique
     # ------------------------------------------------------------------
     async def reconcile(self, snapshot: Snapshot) -> None:
-        """Aligne l'incident actif sur l'état observé."""
+        """Aligne les incidents actifs sur l'état observé.
+
+        Chaque groupe de causes racines *reliées entre elles* par le graphe
+        d'impact (`HM_IMPACT_MAP`) est traité indépendamment : un service qui
+        n'a rien à voir avec un incident déjà ouvert en déclenche un second,
+        géré séparément — pas un update de plus sur le premier.
+        """
         if snapshot.in_grace:
             return
 
@@ -326,72 +373,123 @@ class IncidentManager:
             if new_status == OPERATIONAL:
                 await self._notifier.reset(service)
 
-        active = await self.get_active()
-        if active and active.get("type") == TYPE_MAINTENANCE:
-            if not await self._close_expired_maintenance(active):
-                # Une maintenance n'est pas un incident. Pendant sa fenêtre, un
-                # service qui tombe et qui remonte est l'objet même de
-                # l'opération : y empiler « We are currently experiencing a
-                # service outage » dit au public le contraire de ce que le staff
-                # a annoncé. Better Stack refuse d'ailleurs le mélange
-                # (`422 affected_resources is invalid` sur chaque update).
-                return
-            active = None
+        actives = await self.get_active_all()
 
-        level = snapshot.level
-        # `affected` porte aussi les services dégradés par ricochet ; `failing`
-        # ne contient que les causes racines, seules dignes de figurer dans le
-        # titre et de consommer le rate-limit.
-        affected = snapshot.affected
-        root = snapshot.failing
+        # Une maintenance n'est pas un incident. Pendant sa fenêtre, un service
+        # qui tombe et qui remonte est l'objet même de l'opération : y empiler
+        # « We are currently experiencing a service outage » dirait au public
+        # le contraire de ce que le staff a annoncé. Toute maintenance active,
+        # quels que soient ses propres services, met la détection auto en
+        # pause — les incidents déjà ouverts, eux, restent gérés par le staff.
+        still_open_maintenance = False
+        for incident in actives:
+            if incident.get("type") == TYPE_MAINTENANCE and not await self._close_expired_maintenance(incident):
+                still_open_maintenance = True
+        if still_open_maintenance:
+            return
+
+        auto_incidents = [i for i in actives if i.get("type") != TYPE_MAINTENANCE and i.get("origin") == "auto"]
+        manual_incidents = [i for i in actives if i.get("type") != TYPE_MAINTENANCE and i.get("origin") != "auto"]
+
+        root_all = list(snapshot.failing)
         statuses = snapshot.statuses()
 
-        if level == colors.OPERATIONAL:
-            if active and active.get("origin") == "auto":
-                await self.resolve(message="All systems are operational again.")
+        # Un incident auto se résout dès que plus aucune de ses causes
+        # racines ne dure — indépendamment du sort des autres incidents.
+        for incident in auto_incidents:
+            roots = set(incident.get("roots") or [])
+            if not (roots & set(root_all)):
+                await self.resolve(incident["id"], message="All systems are operational again.")
+
+        if not root_all:
             return
 
-        # La signature de l'état observé décide de tout : un update ne part que
-        # si elle a bougé.
-        fingerprint = _fingerprint(level, snapshot.effective)
+        for cluster in self._clusters(root_all):
+            # Ordonnés comme la configuration (`HM_SERVICES`), jamais
+            # alphabétiquement : c'est cet ordre que lisent titres et messages.
+            roots_ordered = [s for s in root_all if s in cluster]
+            collateral_set = {
+                target for source in cluster for target in self._impact.impacts(source)
+            } & set(snapshot.affected) - cluster
+            collateral_ordered = [s for s in snapshot.affected if s in collateral_set]
+            affected = [s for s in snapshot.affected if s in cluster or s in collateral_set]
+            level = _cluster_level(cluster, statuses, self._s.critical_services)
+            fingerprint = _fingerprint(level, {s: statuses.get(s, "unknown") for s in affected})
 
-        if active is None:
-            if not await self._allow_any(root, statuses):
-                return
-            await self.open(
-                title=_auto_title(level, root, self._s),
-                message=_auto_message(level, root, snapshot.collateral, self._s),
-                level=level,
-                affected=affected,
-                origin="auto",
-                notify=level == colors.MAJOR_OUTAGE,
+            matched = next(
+                (i for i in auto_incidents if set(i.get("roots") or []) & cluster), None
+            ) or next(
+                (i for i in manual_incidents if set(i.get("affected") or []) & cluster), None
+            )
+
+            if matched is None:
+                if not await self._allow_any(roots_ordered, statuses):
+                    continue
+                await self.open(
+                    title=_auto_title(level, roots_ordered, self._s),
+                    message=_auto_message(level, roots_ordered, collateral_ordered, self._s),
+                    level=level,
+                    affected=affected,
+                    origin="auto",
+                    notify=level == colors.MAJOR_OUTAGE,
+                    statuses=statuses,
+                    fingerprint=fingerprint,
+                    roots=roots_ordered,
+                )
+                continue
+
+            if matched.get("state_fingerprint") == fingerprint:
+                continue
+
+            is_auto = matched.get("origin") == "auto"
+            target_level = level if is_auto else matched.get("level")
+            merged_affected = list(matched.get("affected") or [])
+            merged_affected += [s for s in affected if s not in merged_affected]
+            await self.add_update(
+                matched["id"],
+                message=_auto_message(level, roots_ordered, collateral_ordered, self._s),
+                level=target_level,
+                affected=merged_affected,
+                roots=roots_ordered if is_auto else None,
+                notify=False,
                 statuses=statuses,
+                dedupe=True,
                 fingerprint=fingerprint,
             )
-            return
 
-        # Incident déjà ouvert : on l'enrichit plutôt que d'en créer un second,
-        # y compris s'il a été ouvert à la main ou depuis Better Stack.
-        #
-        # Un seul update par changement réel — un service qui tombe, un service
-        # qui revient, une sévérité qui bouge. Tant que l'état observé est le
-        # même, il n'y a rien de neuf à publier : comparer `affected` et le
-        # niveau ne suffisait pas, parce que le niveau d'un incident ouvert
-        # ailleurs n'est jamais réécrit et que `affected` ne distingue pas un
-        # service `degraded` d'un service `down`.
-        if active.get("state_fingerprint") == fingerprint:
-            return
+    def _clusters(self, roots: list[str]) -> list[set[str]]:
+        """Regroupe les causes racines reliées entre elles par le graphe d'impact.
 
-        target_level = level if active.get("origin") == "auto" else active.get("level")
-        await self.add_update(
-            message=_auto_message(level, root, snapshot.collateral, self._s),
-            level=target_level,
-            affected=affected,
-            notify=False,
-            statuses=statuses,
-            dedupe=True,
-            fingerprint=fingerprint,
-        )
+        Deux services qui tombent en même temps ne sont la même panne que s'ils
+        sont connectés — directement ou en chaîne — par `HM_IMPACT_MAP`. Sans
+        ça, deux services sans aucun rapport (le dashboard et un service tiers,
+        par exemple) fusionneraient dans le même incident au premier cycle où
+        ils tombent ensemble.
+        """
+        pool = set(roots)
+        adjacency: dict[str, set[str]] = {r: set() for r in pool}
+        for r in pool:
+            for target in self._impact.impacts(r):
+                if target in pool:
+                    adjacency[r].add(target)
+                    adjacency[target].add(r)
+
+        seen: set[str] = set()
+        clusters: list[set[str]] = []
+        for start in sorted(pool):
+            if start in seen:
+                continue
+            cluster: set[str] = set()
+            stack = [start]
+            while stack:
+                node = stack.pop()
+                if node in cluster:
+                    continue
+                cluster.add(node)
+                stack.extend(adjacency[node] - cluster)
+            seen |= cluster
+            clusters.append(cluster)
+        return clusters
 
     async def _close_expired_maintenance(self, incident: dict) -> bool:
         """Clôt une maintenance dont la fenêtre est passée. Renvoie `True` si clos.
@@ -408,7 +506,7 @@ class IncidentManager:
             return False
         if (age_seconds(ends_at) or 0) <= 0:
             return False
-        await self.resolve(message="The scheduled maintenance window has ended.")
+        await self.resolve(incident["id"], message="The scheduled maintenance window has ended.")
         log.info("maintenance %s close : fenêtre terminée", incident.get("id"))
         return True
 
@@ -434,16 +532,9 @@ class IncidentManager:
             # tout service affecté partirait en `downtime` sur la status page,
             # y compris ceux qui ne font que ralentir.
             statuses = payload.get("statuses") or None
-            if await self.get_active():
-                # Un seul incident à la fois : la commande enrichit l'existant.
-                return await self.add_update(
-                    message=payload.get("message") or "",
-                    author=author,
-                    level=level,
-                    affected=affected,
-                    notify=notify,
-                    statuses=statuses,
-                )
+            # « Create » ouvre toujours un incident distinct — plusieurs
+            # peuvent être actifs à la fois, gérés indépendamment. Enrichir un
+            # incident existant se fait via `/status update`, jamais ici.
             return await self.open(
                 title=payload.get("title") or _auto_title(level, affected, self._s),
                 message=payload.get("message") or "",
@@ -456,7 +547,12 @@ class IncidentManager:
             )
 
         if action == "incident.update":
+            incident_id_ = payload.get("incident_id")
+            if not incident_id_:
+                log.warning("incident.update sans incident_id")
+                return None
             return await self.add_update(
+                incident_id_,
                 message=payload.get("message") or "",
                 author=author,
                 level=payload.get("level"),
@@ -465,7 +561,12 @@ class IncidentManager:
             )
 
         if action == "incident.resolve":
+            incident_id_ = payload.get("incident_id")
+            if not incident_id_:
+                log.warning("incident.resolve sans incident_id")
+                return None
             return await self.resolve(
+                incident_id_,
                 message=payload.get("message") or "This incident has been resolved.",
                 author=author,
                 notify=notify,
@@ -528,47 +629,52 @@ class IncidentManager:
             on_foreign_incident=self._adopt,
         )
 
-    async def sync_updates(self) -> dict | None:
-        """Recharge les updates de l'incident actif depuis Better Stack.
+    async def sync_updates(self) -> list[dict]:
+        """Recharge les updates de chaque incident actif depuis Better Stack.
 
         Une update *éditée* là-bas (texte corrigé sur un update déjà posté) ne
         déclenche jamais le webhook — l'anti-boucle ne marque que les ID
         *nouveaux* (`hm:bs:seen_updates`) — donc une correction n'atteignait
         jamais le message Discord. Cette commande resynchronise l'historique
         affiché sur celui de Better Stack, à la main, plutôt que d'attendre
-        une update qui ne viendra pas.
+        une update qui ne viendra pas. Porte sur tous les incidents actifs
+        adossés à un report, pas un seul : ils sont indépendants.
         """
-        incident = await self.get_active()
-        report_id = incident.get("bs_report_id") if incident else None
-        if not report_id:
-            return None
+        actives = [i for i in await self.get_active_all() if i.get("bs_report_id")]
+        if not actives:
+            return []
 
         snapshot = await self._bs.poll_index()
         if snapshot is None:
-            return None
-        report = next(
-            (r for r in snapshot.reports if str(r.get("id")) == str(report_id)), None
-        )
-        updates = sorted(
-            (report.get("updates") or []) if report else [],
-            key=lambda u: u.get("published_at") or "",
-        )
-        if not updates:
-            return None
+            return []
+        reports = {str(r.get("id")): r for r in snapshot.reports}
 
-        incident["updates"] = [
-            {
-                "kind": "created" if index == 0 else "updated",
-                "at": update.get("published_at"),
-                "message": update.get("message") or "",
-                "author": "Better Stack",
-            }
-            for index, update in enumerate(updates)
-        ]
-        await self._save(incident)
-        if not await self._notifier.re_render(incident):
-            log.warning("resync %s : réédition du message Discord impossible", incident.get("id"))
-        return incident
+        synced: list[dict] = []
+        for incident in actives:
+            report = reports.get(str(incident.get("bs_report_id")))
+            updates = sorted(
+                (report.get("updates") or []) if report else [],
+                key=lambda u: u.get("published_at") or "",
+            )
+            if not updates:
+                continue
+
+            incident["updates"] = [
+                {
+                    "kind": "created" if index == 0 else "updated",
+                    "at": update.get("published_at"),
+                    "message": update.get("message") or "",
+                    "author": "Better Stack",
+                }
+                for index, update in enumerate(updates)
+            ]
+            await self._save(incident)
+            if not await self._notifier.re_render(incident):
+                log.warning(
+                    "resync %s : réédition du message Discord impossible", incident.get("id")
+                )
+            synced.append(incident)
+        return synced
 
     async def reconcile_betterstack(self) -> None:
         """Filet de sécurité : rattrape ce qu'un webhook manqué aurait perdu."""
@@ -636,12 +742,19 @@ class IncidentManager:
             return True
         return False
 
+    async def _find_by_report(self, report_id: str) -> dict | None:
+        for incident in await self.get_active_all():
+            if str(incident.get("bs_report_id")) == report_id:
+                return incident
+        return None
+
     async def _relay_update(self, report: dict, update: dict) -> None:
         """Un update posté à la main sur *notre* incident : on le relaie."""
-        active = await self.get_active()
-        if not active or str(active.get("bs_report_id")) != str(report.get("id")):
+        active = await self._find_by_report(str(report.get("id")))
+        if active is None:
             return
         await self.add_update(
+            active["id"],
             message=update.get("message") or "",
             author=update.get("author") or "Better Stack",
             notify=False,
@@ -650,15 +763,18 @@ class IncidentManager:
         )
 
     async def _adopt(self, report: dict, update: dict) -> None:
-        """Incident créé hors du monitor (staff ou monitor Better Stack)."""
-        active = await self.get_active()
+        """Incident créé hors du monitor (staff ou monitor Better Stack).
+
+        Plusieurs incidents pouvant être actifs à la fois, un report Better
+        Stack qui n'est *pas le nôtre* est toujours adopté comme un nouvel
+        incident indépendant — il n'a par construction rien à voir avec ceux
+        déjà suivis localement.
+        """
         report_id = str(report.get("id"))
 
-        if active and str(active.get("bs_report_id")) == report_id:
+        active = await self._find_by_report(report_id)
+        if active is not None:
             await self._relay_update(report, update)
-            return
-        if active:
-            log.info("incident Better Stack %s ignoré : un incident est déjà actif", report_id)
             return
 
         # `report_type: automatic` = incident créé par un monitor Better Stack,
@@ -743,6 +859,27 @@ def _auto_message(
 async def _ignore(report: dict, update: dict) -> None:
     """Marquer vu sans rien faire — voir `reconcile_betterstack`."""
     return None
+
+
+def _cluster_level(cluster: set[str], statuses: dict[str, str], critical: list[str]) -> str:
+    """Sévérité d'un groupe de causes racines reliées entre elles.
+
+    Reprend `Detector.aggregate()`, mais scopée au cluster : `major_outage`
+    n'est mérité que si le cluster couvre *tous* les services critiques,
+    `partial_outage` s'il n'en couvre qu'une partie.
+    """
+    critical_set = set(critical)
+    down = {s for s in cluster if statuses.get(s) == DOWN}
+    degraded = {s for s in cluster if statuses.get(s) == DEGRADED}
+    critical_down = down & critical_set
+
+    if critical_set and critical_down == critical_set:
+        return colors.MAJOR_OUTAGE
+    if critical_down:
+        return colors.PARTIAL_OUTAGE
+    if degraded or down:
+        return colors.DEGRADED
+    return colors.OPERATIONAL
 
 
 def _level_for(statuses: dict[str, str]) -> str:

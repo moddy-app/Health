@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import datetime, timezone
 
 log = logging.getLogger("hm.util")
@@ -36,4 +37,8 @@ def age_seconds(value: str | None) -> float | None:
 
 
 def incident_id(moment: datetime | None = None) -> str:
-    return (moment or utcnow()).astimezone(timezone.utc).strftime("inc_%Y%m%d_%H%M")
+    """`inc_<horodatage>_<suffixe>` — le suffixe évite une collision entre deux
+    incidents ouverts dans la même minute, désormais possible : plusieurs
+    peuvent être actifs à la fois (§docs/incidents.md)."""
+    stamp = (moment or utcnow()).astimezone(timezone.utc).strftime("%Y%m%d_%H%M")
+    return f"inc_{stamp}_{secrets.token_hex(3)}"

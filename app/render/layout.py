@@ -108,14 +108,13 @@ def status_summary(s: StatusPresentation) -> str:
 
 
 def status_header(s: StatusPresentation) -> str:
-    """En-tête du panneau de détail : le niveau global et rien d'autre."""
+    """En-tête du panneau de détail : le niveau global, puis un incident par ligne."""
     lines = [f"### {s.emoji} {s.headline}", f"-# Last updated <t:{s.timestamp}:R>"]
-    if s.incident_title:
-        title = f"[{s.incident_title}]({s.incident_url})" if s.incident_url else s.incident_title
+    for incident in s.incidents:
+        title = f"[{incident.title}]({incident.url})" if incident.url else incident.title
         # `OnGoing`/`Resolved` sont réservés à la ligne « Status: » du message
-        # d'incident : ici, c'est l'icône de niveau — ou de maintenance —
-        # qui s'applique, comme dans le titre juste au-dessus.
-        lines.append(f"{s.incident_icon} **{title}**")
+        # d'incident : ici, c'est l'icône propre à *cet* incident qui s'applique.
+        lines.append(f"{incident.icon} **{title}**")
     return "\n".join(lines)
 
 

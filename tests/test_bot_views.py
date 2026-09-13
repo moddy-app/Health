@@ -480,23 +480,24 @@ def test_the_maintenance_icon_hides_without_a_configured_window():
 # /status cancel — n'agit que sur une maintenance active
 # ----------------------------------------------------------------------
 async def test_cancel_requires_an_active_maintenance():
-    from app.bot.commands import _require_active_maintenance
+    from app.bot.commands import _resolve_target
 
-    for active in (None, {"type": "incident"}):
+    for actives in ([], [{"type": "incident", "id": "inc_1"}]):
         client = SimpleNamespace(ctx=SimpleNamespace(incidents=SimpleNamespace(
-            get_active=(lambda a=active: _async_return(a))
+            get_active_all=(lambda a=actives: _async_return(a))
         )))
         interaction = FakeInteraction()
         interaction.client = client
-        assert await _require_active_maintenance(interaction) is False
+        assert await _resolve_target(interaction, only_maintenance=True) is None
         assert "No active maintenance" in flatten(interaction.sent.to_components())
 
+    maintenance = {"type": "maintenance", "id": "inc_2"}
     client = SimpleNamespace(ctx=SimpleNamespace(incidents=SimpleNamespace(
-        get_active=lambda: _async_return({"type": "maintenance"})
+        get_active_all=lambda: _async_return([maintenance])
     )))
     interaction = FakeInteraction()
     interaction.client = client
-    assert await _require_active_maintenance(interaction) is True
+    assert await _resolve_target(interaction, only_maintenance=True) == (maintenance, None)
 
 
 async def _async_return(value):

@@ -224,8 +224,26 @@ connu est ignoré, `owned` ou pas. Éditer le *texte* d'une update déjà posté
 sur Better Stack ne change pas son ID — le webhook ne livre donc jamais cette
 correction, et le message Discord reste figé sur l'ancien texte, silencieusement.
 
+### Ce que `/status reload` remet d'aplomb
+
 `/status reload` (`IncidentManager.sync_updates`, sur chaque incident actif
-adossé à un report) répare ça à la main :
+adossé à un report) resynchronise **tout ce que le staff a pu changer là-bas** :
+
+| Champ | Repris de Better Stack |
+|---|---|
+| `updates` | Toujours — l'historique complet, remplacé |
+| `title` | Toujours — rien ne le réécrit en face |
+| `level`, `affected` | Sauf incident `auto` : son niveau appartient à la détection, qui le réécrirait au cycle suivant |
+| Résolution | Toujours — un report clos là-bas ferme l'incident ici |
+
+Une résolution n'a pas d'endpoint dédié : c'est un update dont **chaque**
+ressource affectée porte `status: "resolved"` (`_is_resolved_report`). Relayée
+comme un update ordinaire, elle remettait le message Discord en « On Going »,
+en rouge, sous un incident pourtant clos sur la status page — et un report déjà
+résolu se faisait adopter comme un incident tout neuf. Un retour *partiel*
+laisse les autres ressources en `downtime`/`degraded` : il ne ferme rien.
+
+Le détail du remplacement des textes :
 relit `index.json` via `poll_index()`, retrouve le report de l'incident actif
 par `bs_report_id`, et **remplace** entièrement `incident["updates"]` par ce
 que dit Better Stack — la première update devient `created`, les suivantes

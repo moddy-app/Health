@@ -756,6 +756,38 @@ async def test_sync_updates_follows_a_severity_edited_on_better_stack(polling, n
     assert synced[0]["type"] == "incident"  # plus `degraded_performance`
 
 
+async def test_sync_updates_reloads_a_title_renamed_on_better_stack(polling):
+    """Renommer le report sur la status page doit atteindre Discord.
+
+    Le titre est figé à l'ouverture — mais un renommage par le staff est
+    délibéré, et `/status reload` existe pour que les deux disent la même chose.
+    """
+    manager = polling(
+        [
+            {
+                "id": "995593",
+                "title": "Dashboard : Authentication & Server Access Issues",
+                "report_type": "manual",
+                "updated_at": iso(),
+                "updates": [{"id": "u1", "message": "Investigating.", "published_at": iso()}],
+            }
+        ]
+    )
+    incident = await manager.open(
+        title="Dashboard down",
+        message="Investigating.",
+        level=colors.PARTIAL_OUTAGE,
+        affected=["moddy-api"],
+        origin="auto",  # même un incident auto : rien ne réécrit son titre en face
+        bs_report_id="995593",
+    )
+
+    synced = await manager.sync_updates()
+
+    assert synced[0]["title"] == "Dashboard : Authentication & Server Access Issues"
+    assert (await manager.get_active(incident["id"]))["title"] == synced[0]["title"]
+
+
 async def test_sync_updates_leaves_an_auto_incident_level_alone(polling):
     """La détection possède le niveau d'un incident `auto` : le reprendre de
     Better Stack ne ferait qu'un aller-retour à chaque cycle."""
@@ -791,6 +823,143 @@ async def test_sync_updates_leaves_an_auto_incident_level_alone(polling):
 
     synced = await manager.sync_updates()
     assert synced[0]["level"] == colors.DEGRADED
+
+
+def _resolved_update(update_id: str, message: str, *, resource: str = "4242") -> dict:
+    """Une résolution Better Stack : toutes les ressources affectées revenues."""
+    return {
+        "id": update_id,
+        "message": message,
+        "published_at": iso(),
+        "affected_resources": [{"status_page_resource_id": resource, "status": "resolved"}],
+    }
+
+
+async def test_a_resolution_made_on_better_stack_closes_the_incident(polling, store, notifier):
+    """Le cas signalé : résolu là-bas, l'incident repassait en rouge ici.
+
+    Une résolution n'a pas d'endpoint dédié côté Better Stack : c'est un update
+    dont chaque ressource est `resolved`. Relayé comme un update ordinaire, il
+    remettait le message Discord en « On Going » sous un incident pourtant clos.
+    """
+    await store.set(keys.BS_CURSOR, iso())
+    manager = polling(
+        [
+            {
+                "id": "1019848",
+                "title": "Dashboard : Authentication Issues",
+                "report_type": "manual",
+                "updated_at": iso(),
+                "updates": [_resolved_update("u9", "Everything is back to normal.")],
+            }
+        ]
+    )
+    manager._s.hm_bs_resource_map = "moddy-bot:4242"
+    incident = await manager.open(
+        title="Dashboard : Authentication Issues",
+        message="The dashboard is unavailable.",
+        level=colors.PARTIAL_OUTAGE,
+        affected=["moddy-bot"],
+        origin="betterstack",
+        bs_report_id="1019848",
+    )
+
+    await manager.reconcile_betterstack()
+
+    assert await manager.get_active(incident["id"]) is None
+    archived = (await manager.history())[0]
+    assert archived["status"] == "resolved"
+    assert archived["updates"][-1]["kind"] == "resolved"
+    assert archived["updates"][-1]["message"] == "Everything is back to normal."
+
+
+async def test_a_resolved_report_is_never_adopted(polling, store):
+    """Clos là-bas avant d'arriver ici : il n'y a plus rien à annoncer."""
+    await store.set(keys.BS_CURSOR, iso())
+    manager = polling(
+        [
+            {
+                "id": "1019848",
+                "title": "Billing issue",
+                "report_type": "manual",
+                "updated_at": iso(),
+                "updates": [_resolved_update("u9", "Fully restored.")],
+            }
+        ]
+    )
+    manager._s.hm_bs_resource_map = "moddy-bot:4242"
+
+    await manager.reconcile_betterstack()
+    assert await manager.get_active_all() == []
+    # `/status reload` ne le ressuscite pas davantage.
+    assert await manager.adopt_missing() == []
+
+
+async def test_sync_updates_closes_an_incident_resolved_on_better_stack(polling, notifier):
+    """`/status reload` sur un incident résolu là-bas le clôt, sans le repeindre."""
+    manager = polling(
+        [
+            {
+                "id": "995593",
+                "title": "Feeds",
+                "report_type": "manual",
+                "updated_at": iso(),
+                "updates": [
+                    {"id": "u1", "message": "Feeds is unavailable.", "published_at": "2026-09-13T08:41:00Z"},
+                    _resolved_update("u2", "Feeds is back."),
+                ],
+            }
+        ]
+    )
+    manager._s.hm_bs_resource_map = "moddy-bot:4242"
+    incident = await manager.open(
+        title="Feeds",
+        message="Feeds is unavailable.",
+        level=colors.PARTIAL_OUTAGE,
+        affected=["moddy-bot"],
+        origin="betterstack",
+        bs_report_id="995593",
+    )
+
+    synced = await manager.sync_updates()
+
+    assert synced[0]["status"] == "resolved"
+    assert await manager.get_active(incident["id"]) is None
+    # L'historique garde le premier mot, et la résolution ne s'y écrit qu'une fois.
+    messages = [u["message"] for u in synced[0]["updates"]]
+    assert messages == ["Feeds is unavailable.", "Feeds is back."]
+
+
+async def test_a_partial_recovery_does_not_close_anything(polling, store):
+    """Une ressource revenue sur deux n'est pas une résolution."""
+    await store.set(keys.BS_CURSOR, iso())
+    manager = polling(
+        [
+            {
+                "id": "1019848",
+                "title": "Billing issue",
+                "report_type": "manual",
+                "updated_at": iso(),
+                "updates": [
+                    {
+                        "id": "u9",
+                        "message": "The API is back, the bot is still down.",
+                        "published_at": iso(),
+                        "affected_resources": [
+                            {"status_page_resource_id": "4242", "status": "resolved"},
+                            {"status_page_resource_id": "4243", "status": "downtime"},
+                        ],
+                    }
+                ],
+            }
+        ]
+    )
+    manager._s.hm_bs_resource_map = "moddy-bot:4242,moddy-api:4243"
+
+    await manager.reconcile_betterstack()
+    incident = await _solo(manager)
+    assert incident["status"] == "open"
+    assert incident["level"] == colors.PARTIAL_OUTAGE
 
 
 async def test_adopt_missing_recovers_an_incident_the_bootstrap_swallowed(polling):

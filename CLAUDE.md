@@ -205,11 +205,17 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
   titre d'incident, bandeau du sticky et liseré compris. Côté rendu,
   `StatusPresentation.display_level` tient le même raisonnement pour un incident
   ouvert à la main en `degraded` sur un service réellement tombé.
-- **`/status reload` recharge aussi la sévérité**, pas seulement les textes :
-  une ressource passée de `degraded` à `downtime` sur Better Stack laissait le
-  message Discord annoncer « Degraded Performance ». Sauf pour un incident
-  `auto` — son niveau appartient à la détection, qui le réécrirait au cycle
-  suivant.
+- **`/status reload` recharge aussi le titre et la sévérité**, pas seulement les
+  textes : une ressource passée de `degraded` à `downtime` sur Better Stack
+  laissait le message Discord annoncer « Degraded Performance », et un report
+  renommé gardait ici son ancien titre. Le niveau fait exception pour un
+  incident `auto` — il appartient à la détection, qui le réécrirait au cycle
+  suivant ; le titre, lui, n'est réécrit par personne.
+- **Une résolution Better Stack n'est pas un update de plus.** Faute d'endpoint
+  `/resolve`, elle se reconnaît à ses ressources : *toutes* `resolved`. Relayée
+  comme un update ordinaire, elle remettait l'incident en « On Going » rouge
+  sous une status page qui le donnait clos, et un report déjà résolu se faisait
+  adopter comme un incident tout neuf. Un retour partiel, lui, ne ferme rien.
 - **Une sonde en échec écrit un heartbeat `down`**, elle ne se contente pas de ne
   rien écrire : sinon la détection attend l'expiration du TTL.
 

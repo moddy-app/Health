@@ -582,6 +582,217 @@ async def test_a_fresh_foreign_incident_is_still_adopted(polling, store):
     assert incident["bs_report_id"] == "1019848"
 
 
+async def test_an_adopted_incident_carries_its_whole_history(polling, store):
+    """Un incident adopté ne commence pas à sa dernière update.
+
+    Constaté en production : un incident ouvert depuis la veille, repris après
+    un redéploiement, s'est affiché sur Discord avec pour seul message « access
+    appears to be recovering » — tout ce qui l'avait précédé avait disparu.
+    """
+    await store.set(keys.BS_CURSOR, iso())
+    manager = polling(
+        [
+            {
+                "id": "1019848",
+                "title": "Dashboard : Authentication Issues",
+                "report_type": "manual",
+                "updated_at": iso(),
+                "updates": [
+                    {"id": "u2", "message": "Root cause identified.", "published_at": "2026-09-12T19:37:00Z"},
+                    {"id": "u1", "message": "The dashboard is unavailable.", "published_at": "2026-09-12T16:23:00Z"},
+                    {"id": "u3", "message": "Access is recovering.", "published_at": iso()},
+                ],
+            }
+        ]
+    )
+
+    await manager.reconcile_betterstack()
+
+    incident = await _solo(manager)
+    # Triées du plus ancien au plus récent, quel que soit l'ordre d'index.json.
+    assert [u["message"] for u in incident["updates"]] == [
+        "The dashboard is unavailable.",
+        "Root cause identified.",
+        "Access is recovering.",
+    ]
+    assert [u["kind"] for u in incident["updates"]] == ["created", "updated", "updated"]
+    # Le message d'ouverture est le premier mot de l'incident, pas le dernier.
+    assert incident["message"] == "The dashboard is unavailable."
+
+
+async def test_adopting_a_history_does_not_relay_it_a_second_time(polling, store):
+    """Les updates reprises sont marquées vues : sans ça, `process_report`
+    les rejouerait une par une juste après l'adoption."""
+    await store.set(keys.BS_CURSOR, iso())
+    manager = polling(
+        [
+            {
+                "id": "1019848",
+                "title": "Billing issue",
+                "report_type": "manual",
+                "updated_at": iso(),
+                "updates": [
+                    {"id": "u1", "message": "Investigating.", "published_at": "2026-09-12T16:23:00Z"},
+                    {"id": "u2", "message": "Fix deployed.", "published_at": iso()},
+                ],
+            }
+        ]
+    )
+
+    await manager.reconcile_betterstack()
+    assert len((await _solo(manager))["updates"]) == 2
+
+    # Un second poll ne doit rien ajouter : tout a déjà été vu.
+    await manager.reconcile_betterstack()
+    assert len((await _solo(manager))["updates"]) == 2
+
+
+async def test_the_legacy_single_incident_format_is_migrated(manager, store):
+    """Le bug du déploiement : `hm:incident:active` portait un incident *seul*.
+
+    Lu comme une carte `{id: incident}`, ses propres champs passaient pour des
+    entrées et étaient tous écartés — l'incident en cours disparaissait au
+    redéploiement, sticky et commandes l'avaient oublié alors qu'il vivait
+    toujours sur Better Stack.
+    """
+    legacy = {
+        "id": "inc_20260912_1623",
+        "title": "Dashboard : Authentication Issues",
+        "level": colors.PARTIAL_OUTAGE,
+        "origin": "discord",
+        "affected": ["moddy-api"],
+        "status": "open",
+        "created_at": "2026-09-12T16:23:00Z",
+        "bs_report_id": "1019848",
+        "updates": [{"kind": "created", "at": "2026-09-12T16:23:00Z", "message": "m", "author": "Jules"}],
+    }
+    await store.set_json(keys.INCIDENT_ACTIVE, legacy)
+
+    actives = await manager.get_active_all()
+    assert [i["id"] for i in actives] == ["inc_20260912_1623"]
+    assert (await manager.get_active("inc_20260912_1623"))["title"] == legacy["title"]
+
+    # Migré une fois pour toutes, et un nouvel incident cohabite avec lui.
+    assert await store.get_json(keys.INCIDENT_ACTIVE) == {"inc_20260912_1623": legacy}
+    await manager.open(
+        title="Autre chose", message="m", level=colors.DEGRADED, affected=["moddy-bot"], origin="discord"
+    )
+    assert len(await manager.get_active_all()) == 2
+
+
+async def test_the_half_migrated_format_keeps_both_sides(manager, store):
+    """La forme qu'a laissée le déploiement : l'ancien incident *et* ce que la
+    version suivante a écrit par-dessus lui.
+
+    Le code d'après lisait la clé, y trouvait un dictionnaire, et y ajoutait ses
+    propres incidents comme s'il s'agissait d'une carte. Réparer l'ancien format
+    sans voir ces entrées-là perdrait l'incident adopté depuis.
+    """
+    legacy = {
+        "id": "inc_20260912_1623",
+        "title": "Ancien incident",
+        "level": colors.PARTIAL_OUTAGE,
+        "origin": "discord",
+        "status": "open",
+        "created_at": "2026-09-12T16:23:00Z",
+        "updates": [{"kind": "created", "at": "2026-09-12T16:23:00Z", "message": "m", "author": "Jules"}],
+    }
+    adopted = {
+        "id": "inc_20260913_1125",
+        "title": "Adopté depuis",
+        "level": colors.PARTIAL_OUTAGE,
+        "origin": "betterstack",
+        "status": "open",
+        "created_at": "2026-09-13T11:25:00Z",
+        "updates": [{"kind": "created", "at": "2026-09-13T11:25:00Z", "message": "m", "author": "Better Stack"}],
+    }
+    await store.set_json(keys.INCIDENT_ACTIVE, {**legacy, adopted["id"]: adopted})
+
+    actives = await manager.get_active_all()
+    assert [i["id"] for i in actives] == [legacy["id"], adopted["id"]]
+    # L'ancien incident ne garde pas l'autre collé dans ses propres champs.
+    assert adopted["id"] not in actives[0]
+
+
+async def test_sync_updates_follows_a_severity_edited_on_better_stack(polling, notifier):
+    """Passer une ressource de `degraded` à `downtime` là-bas doit remonter ici.
+
+    Recharger les seuls textes laissait le message Discord annoncer « Degraded
+    Performance » sous une ressource devenue `downtime`.
+    """
+    manager = polling(
+        [
+            {
+                "id": "995593",
+                "title": "Feeds",
+                "report_type": "manual",
+                "updated_at": iso(),
+                "updates": [
+                    {
+                        "id": "u1",
+                        "message": "Feeds is unavailable.",
+                        "published_at": iso(),
+                        "affected_resources": [
+                            {"status_page_resource_id": "4242", "status": "downtime"}
+                        ],
+                    }
+                ],
+            }
+        ]
+    )
+    manager._s.hm_bs_resource_map = "moddy-bot:4242"
+    await manager.open(
+        title="Feeds",
+        message="m",
+        level=colors.DEGRADED,
+        affected=["moddy-bot"],
+        origin="betterstack",
+        bs_report_id="995593",
+    )
+
+    synced = await manager.sync_updates()
+
+    assert synced[0]["level"] == colors.PARTIAL_OUTAGE
+    assert synced[0]["type"] == "incident"  # plus `degraded_performance`
+
+
+async def test_sync_updates_leaves_an_auto_incident_level_alone(polling):
+    """La détection possède le niveau d'un incident `auto` : le reprendre de
+    Better Stack ne ferait qu'un aller-retour à chaque cycle."""
+    manager = polling(
+        [
+            {
+                "id": "995593",
+                "title": "Feeds",
+                "report_type": "manual",
+                "updated_at": iso(),
+                "updates": [
+                    {
+                        "id": "u1",
+                        "message": "Feeds is unavailable.",
+                        "published_at": iso(),
+                        "affected_resources": [
+                            {"status_page_resource_id": "4242", "status": "downtime"}
+                        ],
+                    }
+                ],
+            }
+        ]
+    )
+    manager._s.hm_bs_resource_map = "moddy-bot:4242"
+    await manager.open(
+        title="Feeds",
+        message="m",
+        level=colors.DEGRADED,
+        affected=["moddy-bot"],
+        origin="auto",
+        bs_report_id="995593",
+    )
+
+    synced = await manager.sync_updates()
+    assert synced[0]["level"] == colors.DEGRADED
+
+
 async def test_adopt_missing_recovers_an_incident_the_bootstrap_swallowed(polling):
     """Le cas signalé : un incident en cours côté Better Stack, jamais chargé
     ici — parce que le tout premier poll l'a pris pour de l'archive. `reload`

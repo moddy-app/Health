@@ -382,10 +382,13 @@ async def test_an_expired_draft_never_publishes_a_half_incident(bot_ctx):
     assert bot_ctx.incidents.commands == []
     assert "expired" in flatten(interaction.edited.to_components())
 
-def test_a_down_non_critical_service_says_down_not_degraded():
-    """`aggregate()` ne réserve les niveaux « outage » qu'aux services critiques :
-    un site vitrine tombé reste au niveau `degraded`, mais dire « Degraded
-    Performance » quand un service est en fait `down` sous-annonce la panne."""
+def test_a_down_service_paints_the_sticky_red_even_at_a_degraded_level():
+    """Le `down` prime sur le `degraded`, icône et liseré compris.
+
+    Un incident ouvert à la main en `degraded` sur un service réellement tombé
+    laissait le bandeau en orange au-dessus d'une liste où ce service était
+    rouge — le sticky annonçait moins grave que sa propre liste.
+    """
     public = {
         "status": "degraded",
         "updated_at": "2026-08-25T19:42:00Z",
@@ -394,10 +397,33 @@ def test_a_down_non_critical_service_says_down_not_degraded():
             {"id": "moddy-website", "name": "Website", "status": "down"},
         ],
     }
-    view = StickyStatusView(StatusPresentation.from_public(public))
-    text = flatten(view.to_components())
-    assert text.startswith(f"### {colors.EMOJI_DEGRADED} Some Services Are Down")
+    snapshot = StatusPresentation.from_public(public)
+    assert snapshot.accent == colors.ACCENT_MAJOR
+    text = flatten(StickyStatusView(snapshot).to_components())
+    assert text.startswith(f"### {colors.EMOJI_DOWN} Some Services Are Down")
     assert "Degraded Performance" not in text
+
+
+def test_a_service_down_under_maintenance_leaves_the_sticky_alone():
+    """Un service couvert par une maintenance en cours n'est pas une panne."""
+    public = {
+        "status": "maintenance",
+        "updated_at": "2026-08-25T19:42:00Z",
+        "services": [{"id": "moddy-api", "name": "API", "status": "down"}],
+        "incidents": [
+            {
+                "type": "maintenance",
+                "level": "maintenance",
+                "title": "Scheduled Maintenance",
+                "affected": ["moddy-api"],
+                "starts_at": "2020-01-01T00:00:00Z",
+                "ends_at": "2099-01-01T00:00:00Z",
+            }
+        ],
+    }
+    snapshot = StatusPresentation.from_public(public)
+    assert snapshot.any_down is False
+    assert snapshot.accent == colors.ACCENT_MAINTENANCE
 
 
 def test_the_ongoing_incident_line_never_borrows_the_status_line_icons():

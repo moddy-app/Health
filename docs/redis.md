@@ -10,7 +10,7 @@ en dur ailleurs.
 |---|---|---|---|
 | `hm:hb:{service}` | string (JSON) | `HM_HEARTBEAT_TTL` (60s) | Dernier heartbeat reçu, augmenté de `received_at` |
 | `hm:state:{service}` | string (JSON) | — | État calculé : `status`, `since`, compteurs, dernier heartbeat |
-| `hm:incident:active` | string (JSON) | — | Incident en cours, un seul à la fois |
+| `hm:incident:active` | string (JSON) | — | Incidents en cours, `{id: incident}` — plusieurs à la fois |
 | `hm:incident:history` | list | trim 100 | Incidents clos, du plus ancien au plus récent |
 | `hm:incident:draft:{user}` | string (JSON) | 900s | Incident saisi dans le modal, en attente du choix de sévérité |
 | `hm:bs:owned` | set | — | IDs des status_report créés par le monitor |
@@ -26,6 +26,12 @@ en dur ailleurs.
 
 Trois clés ne figuraient pas dans la spec : `hm:bs:last_event_at`,
 `hm:notify:queue` (nommée mais non tabulée) et `hm:notify:rl:*`.
+
+`hm:incident:active` a porté un incident **seul** tant qu'un seul pouvait être
+actif. `IncidentManager._load_active` reconnaît encore cette forme et la migre
+au premier accès : sans ça, les champs de l'incident passaient pour des entrées
+de la carte et étaient tous écartés — l'incident en cours disparaissait au
+déploiement, sans une ligne de log.
 
 ## Plus aucun canal pubsub
 

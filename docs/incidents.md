@@ -164,12 +164,13 @@ route désoriente les lecteurs qui suivent le fil.
 ## `degraded` est public aussi
 
 Un niveau `degraded` publie un report Better Stack comme n'importe quel autre
-niveau. Un service non-critique en panne complète (`aggregate()` ne réserve
-`partial_outage`/`major_outage` qu'aux services de `HM_CRITICAL_SERVICES`)
-reste au niveau `degraded` — le cacher de la status page laisserait un service
-réellement down sans la moindre trace publique. Les seuils de détection
-(`HM_FAILURE_THRESHOLD`, `HM_MIN_SILENCE`) et le rate-limit par service
-suffisent à filtrer le bruit ; il n'y a pas besoin d'un filtre de plus ici.
+niveau — le cacher de la status page laisserait un vrai ralentissement sans la
+moindre trace publique. Les seuils de détection (`HM_FAILURE_THRESHOLD`,
+`HM_MIN_SILENCE`) et le rate-limit par service suffisent à filtrer le bruit ;
+il n'y a pas besoin d'un filtre de plus ici.
+
+Un service **franchement `down`**, lui, n'est jamais `degraded` : même
+non-critique, il vaut `partial_outage` (§[detection.md](detection.md#sévérité-agrégée)).
 
 ## Résolution
 

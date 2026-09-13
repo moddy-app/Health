@@ -162,14 +162,20 @@ le service, `impacted_by` la raison de l'écart.
 | Niveau | Condition | Action |
 |---|---|---|
 | `operational` | Tout OK | Rien |
-| `degraded` | ≥1 `degraded`, ou un service non critique `down` | Discord seulement |
-| `partial_outage` | ≥1 service critique `down`, mais pas tous | Discord + Better Stack |
+| `degraded` | ≥1 `degraded`, et aucun `down` | Discord seulement |
+| `partial_outage` | ≥1 service `down`, critique ou non, mais pas tous les critiques | Discord + Better Stack |
 | `major_outage` | **Tous** les services critiques `down` | Discord + Better Stack + notify subscribers |
 
 Services critiques : `HM_CRITICAL_SERVICES`, par défaut `moddy-bot,moddy-api`.
 La spec écrivait « Bot **et** API down » ; le code généralise à « tous les
 services critiques », ce qui redonne le même résultat avec la configuration par
 défaut tout en restant correct si la liste change.
+
+**Un service `down` n'est jamais seulement `degraded`.** Réserver les niveaux
+« outage » aux seuls services critiques faisait annoncer « Degraded
+Performance », en orange, un service parti en vrille : le titre de l'incident,
+le bandeau du sticky et son liseré sous-annonçaient tous la panne. Seul
+`major_outage` reste réservé aux critiques — et à leur chute complète.
 
 La sévérité est calculée sur les états **observés**, pas sur les états propagés :
 « un service critique down » doit rester une affirmation exacte. Un état dérivé

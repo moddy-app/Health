@@ -189,6 +189,27 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
 - **Railway n'accepte que quatre niveaux de log** — `debug`, `info`, `warn`,
   `error`. `WARNING` et `CRITICAL` doivent être traduits, sinon tout ressort en
   `info` et les avertissements se noient. Voir `app/logs.py`.
+- **Changer la forme d'une clé Redis perd son contenu en silence.**
+  `hm:incident:active` est passé d'un incident seul à une carte `{id: incident}`
+  et l'incident en cours a disparu au déploiement : lu comme une carte, ses
+  propres champs passaient pour des entrées et étaient tous écartés. Une clé qui
+  change de forme se migre à la lecture — `IncidentManager._load_active`.
+- **Un incident adopté arrive avec tout son historique**, pas avec sa seule
+  dernière update : repris après un redéploiement, un incident vieux de la
+  veille s'affichait avec pour unique message « access appears to be
+  recovering ». Les updates reprises sont marquées vues au passage, sinon
+  `process_report` les rejoue une par une juste après l'adoption.
+- **Un service `down` n'est jamais `degraded`**, même non-critique : il vaut
+  `partial_outage`. Réserver les niveaux « outage » aux seuls critiques faisait
+  annoncer « Degraded Performance » en orange sur un service parti en vrille —
+  titre d'incident, bandeau du sticky et liseré compris. Côté rendu,
+  `StatusPresentation.display_level` tient le même raisonnement pour un incident
+  ouvert à la main en `degraded` sur un service réellement tombé.
+- **`/status reload` recharge aussi la sévérité**, pas seulement les textes :
+  une ressource passée de `degraded` à `downtime` sur Better Stack laissait le
+  message Discord annoncer « Degraded Performance ». Sauf pour un incident
+  `auto` — son niveau appartient à la détection, qui le réécrirait au cycle
+  suivant.
 - **Une sonde en échec écrit un heartbeat `down`**, elle ne se contente pas de ne
   rien écrire : sinon la détection attend l'expiration du TTL.
 

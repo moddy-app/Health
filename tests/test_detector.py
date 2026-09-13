@@ -218,6 +218,39 @@ async def test_public_status_keeps_the_observed_level_when_more_severe(
     assert payload["status"] == colors.MAJOR_OUTAGE
 
 
+async def test_public_payload_floors_an_affected_service_still_reporting_ok(
+    detector, store, settings
+):
+    """Un service cité dans un incident manuel ne reste pas « Operational ».
+
+    Le service continue d'envoyer des heartbeats `ok` — il n'a pas conscience
+    d'être en panne pour l'utilisateur — mais un incident a été ouvert à la
+    main dessus (`/status incident`). Sans plancher par service, la ligne du
+    sticky dirait « Operational » juste sous le titre de l'incident qui le
+    cite : la priorité doit revenir à l'incident.
+    """
+    await _beat(store, settings, "moddy-bot", status="ok")
+    await _beat(store, settings, "moddy-api", status="ok")
+    await detector.run_cycle()
+    snapshot = await detector.run_cycle()
+
+    incident = {
+        "id": "inc_6",
+        "type": "incident",
+        "level": colors.MAJOR_OUTAGE,
+        "title": "Dashboard unavailable",
+        "status": "open",
+        "affected": ["moddy-api"],
+        "updates": [],
+    }
+    payload = detector.public_payload(snapshot, incident)
+    services = {s["id"]: s for s in payload["services"]}
+    assert services["moddy-api"]["status"] == "down"
+    assert services["moddy-api"]["reported"] == "operational"
+    # Un service non cité par l'incident garde son état observé.
+    assert services["moddy-bot"]["status"] == "operational"
+
+
 async def test_public_status_ignores_maintenance_level(detector, settings, store):
     """Une maintenance n'a jamais à faire monter le niveau agrégé (§ docs/incidents.md)."""
     snapshot = detector.current_snapshot()

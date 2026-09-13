@@ -257,6 +257,9 @@ class Detector:
         # dashboard.
         ordered = self._s.display_order(list(snapshot.services))
 
+        floor = _incident_service_floor(active.get("level")) if active else None
+        incident_affected = set(active.get("affected") or []) if active else set()
+
         return {
             "status": _public_status(snapshot.level, active),
             "updated_at": snapshot.updated_at,
@@ -264,8 +267,12 @@ class Detector:
                 {
                     "id": service,
                     "name": self._s.display_name(service),
-                    # Ce que vit l'utilisateur, propagation d'impact comprise.
-                    "status": snapshot.effective.get(service, snapshot.services[service].status),
+                    # Ce que vit l'utilisateur, propagation d'impact comprise —
+                    # et jamais moins sévère qu'un incident manuel qui le cite.
+                    "status": _service_status_floor(
+                        snapshot.effective.get(service, snapshot.services[service].status),
+                        floor if service in incident_affected else None,
+                    ),
                     # Ce que le service dit de lui-même.
                     "reported": snapshot.services[service].status,
                     "impacted_by": snapshot.impacted_by.get(service, []),
@@ -293,6 +300,35 @@ def _public_status(observed: str, active: dict | None) -> str:
     if level and colors.SEVERITY_ORDER.get(level, 0) > colors.SEVERITY_ORDER.get(observed, 0):
         return level
     return observed
+
+
+# Sévérité par service (échelle de `ServiceState.status`), distincte de
+# `colors.SEVERITY_ORDER` qui note la sévérité *agrégée* d'un incident.
+_SERVICE_SEVERITY = {UNKNOWN: 0, OPERATIONAL: 0, DEGRADED: 1, DOWN: 2}
+
+
+def _incident_service_floor(level: str | None) -> str | None:
+    """Traduit le niveau d'un incident vers l'échelle par service, ou `None`.
+
+    Un incident manuel (`/status incident`) est ouvert sur un état vécu par
+    l'utilisateur, pas forcément déclaré par le service : ses heartbeats
+    peuvent continuer à dire `operational`. Sans ce plancher, la ligne du
+    service concerné resterait "Operational" dans le sticky juste en dessous
+    du titre de l'incident qui le cite.
+    """
+    if level in (colors.PARTIAL_OUTAGE, colors.MAJOR_OUTAGE):
+        return DOWN
+    if level == colors.DEGRADED:
+        return DEGRADED
+    return None
+
+
+def _service_status_floor(status: str, floor: str | None) -> str:
+    if not floor:
+        return status
+    if _SERVICE_SEVERITY.get(floor, 0) > _SERVICE_SEVERITY.get(status, 0):
+        return floor
+    return status
 
 
 def _public_incident(incident: dict | None) -> dict | None:

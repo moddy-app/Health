@@ -528,12 +528,13 @@ class StubIndex:
         return self
 
 
-def report(report_id: str, *, message: str, at: str) -> dict:
+def report(report_id: str, *, message: str, at: str, aggregate_state: str | None = None) -> dict:
     return {
         "id": report_id,
         "title": "Billing issue",
         "report_type": "manual",
         "updated_at": at,
+        "aggregate_state": aggregate_state,
         "updates": [{"id": f"u{report_id}", "message": message, "published_at": at}],
     }
 
@@ -579,6 +580,55 @@ async def test_a_fresh_foreign_incident_is_still_adopted(polling, store):
     incident = await _solo(manager)
     assert incident["origin"] == "betterstack"
     assert incident["bs_report_id"] == "1019848"
+
+
+async def test_adopt_missing_recovers_an_incident_the_bootstrap_swallowed(polling):
+    """Le cas signalé : un incident en cours côté Better Stack, jamais chargé
+    ici — parce que le tout premier poll l'a pris pour de l'archive. `reload`
+    doit quand même l'envoyer, sans attendre que le webhook ou le poll
+    automatique ne le revoient jamais (ils ne le reverront pas : ses updates
+    sont déjà marqués vus)."""
+    manager = polling([report("995593", message="Still ongoing.", at=iso())])
+
+    await manager.reconcile_betterstack()  # premier poll : avalé sans être chargé
+    assert await manager.get_active_all() == []
+
+    adopted = await manager.adopt_missing()
+    assert len(adopted) == 1
+    assert adopted[0]["bs_report_id"] == "995593"
+    incident = await _solo(manager)
+    assert incident["origin"] == "betterstack"
+
+    # Rejoué, il ne duplique pas : l'incident est maintenant suivi.
+    assert await manager.adopt_missing() == []
+
+
+async def test_adopt_missing_skips_a_report_actually_resolved(polling):
+    """Ce qui est réellement clos côté Better Stack ne doit pas être rouvert ici."""
+    manager = polling(
+        [report("995593", message="Restored.", at="2026-01-01T00:00:00Z", aggregate_state="resolved")]
+    )
+
+    await manager.reconcile_betterstack()  # avalé par l'amorçage, comme ci-dessus
+    assert await manager.adopt_missing() == []
+    assert await manager.get_active_all() == []
+
+
+async def test_adopt_missing_ignores_an_incident_already_tracked_locally(polling, store):
+    """Ne réadopte pas ce qui est déjà suivi — `sync_updates` s'en charge."""
+    await store.set(keys.BS_CURSOR, iso())
+    manager = polling([report("995593", message="Investigating.", at=iso())])
+    await manager.open(
+        title="Billing issue",
+        message="Investigating.",
+        level=colors.PARTIAL_OUTAGE,
+        affected=["moddy-api"],
+        origin="discord",
+        bs_report_id="995593",
+    )
+
+    assert await manager.adopt_missing() == []
+    assert len(await manager.get_active_all()) == 1
 
 
 async def test_a_second_foreign_incident_is_adopted_independently(polling, store):

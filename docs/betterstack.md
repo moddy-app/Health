@@ -197,12 +197,20 @@ Deux gardes, désormais :
 1. **Amorçage.** Tant que `hm:bs:cursor` est absent, le poll marque tout comme
    vu sans rien traiter. Le monitor prend l'historique pour acquis et ne réagit
    qu'à ce qui arrive ensuite. Le prix : un incident Better Stack déjà ouvert au
-   moment d'un redémarrage sans Redis n'est pas adopté. C'est le bon échange —
-   manquer une adoption coûte moins cher que rejouer une archive.
+   moment d'un redémarrage sans Redis n'est pas adopté automatiquement.
 2. **Âge.** Un report inconnu dont l'update le plus récent a plus de
-   `HM_BS_ADOPT_MAX_AGE` (1h) n'est jamais adopté. `ends_at` restant `null` même
-   sur un report résolu, l'âge du dernier mot est le seul indice fiable qu'un
-   incident est clos.
+   `HM_BS_ADOPT_MAX_AGE` (1h) n'est jamais adopté automatiquement. `ends_at`
+   restant `null` même sur un report résolu, l'âge du dernier mot serait sinon
+   le seul indice disponible qu'un incident est clos.
+
+Ces deux gardes marquent les updates concernées comme vues sans les traiter :
+ni le webhook (qui ne les revoit jamais, ce ne sont pas de nouveaux ID), ni le
+poll suivant (même garde côté anti-boucle) ne rattraperont l'incident tout
+seuls après coup — même s'il est toujours ouvert là-bas. `/status reload`
+(`IncidentManager.adopt_missing`) est le filet de secours explicite : demandé
+par le staff, il ignore les deux gardes et adopte tout report **encore actif**
+(`aggregate_state != "resolved"`) qui n'est pas déjà suivi localement — ce qui
+est réellement résolu là-bas n'est jamais rouvert ici.
 
 Un update relayé vers Discord n'est **jamais** republié vers Better Stack
 (`publish_betterstack=False`) : il y existe déjà, le republier serait la boucle.
@@ -216,7 +224,8 @@ connu est ignoré, `owned` ou pas. Éditer le *texte* d'une update déjà posté
 sur Better Stack ne change pas son ID — le webhook ne livre donc jamais cette
 correction, et le message Discord reste figé sur l'ancien texte, silencieusement.
 
-`/status reload` (`IncidentManager.sync_updates`) répare ça à la main :
+`/status reload` (`IncidentManager.sync_updates`, sur chaque incident actif
+adossé à un report) répare ça à la main :
 relit `index.json` via `poll_index()`, retrouve le report de l'incident actif
 par `bs_report_id`, et **remplace** entièrement `incident["updates"]` par ce
 que dit Better Stack — la première update devient `created`, les suivantes

@@ -676,6 +676,63 @@ class IncidentManager:
             synced.append(incident)
         return synced
 
+    async def adopt_missing(self) -> list[dict]:
+        """Rattrape tout incident Better Stack en cours que le monitor n'a pas chargé.
+
+        Un webhook manqué est déjà rattrapé par le poll périodique
+        (`reconcile_betterstack`) — mais celui-ci se tait volontairement sur le
+        tout premier poll (`bootstrap`, §docs/betterstack.md) et sur un report
+        resté silencieux trop longtemps (`HM_BS_ADOPT_MAX_AGE`), pour ne pas
+        rejouer de l'archive. Un incident réellement en cours au moment de ce
+        silence reste alors orphelin pour toujours : ni le webhook ni le poll
+        ne le reverront, `hm:bs:seen_updates` l'ayant déjà marqué vu sans
+        l'adopter. Cette commande, explicitement déclenchée par le staff,
+        ignore ces deux gardes : ce qui est encore actif là-bas doit être
+        annoncé ici, quelle que soit la raison pour laquelle ça n'a pas déjà
+        été fait.
+        """
+        snapshot = await self._bs.poll_index()
+        if snapshot is None:
+            return []
+
+        tracked = {
+            str(i.get("bs_report_id")) for i in await self.get_active_all() if i.get("bs_report_id")
+        }
+        adopted: list[dict] = []
+        for report in snapshot.reports:
+            report_id = str(report.get("id"))
+            if not report_id or report_id in tracked:
+                continue
+            # `ends_at` ne dit jamais rien (§docs/betterstack.md) : c'est
+            # `aggregate_state` qui tranche si ce report est encore actif.
+            if str(report.get("aggregate_state") or "").lower() == "resolved":
+                continue
+            updates = sorted(
+                report.get("updates") or [], key=lambda u: u.get("published_at") or ""
+            )
+            if not updates:
+                continue
+
+            last = updates[-1]
+            await self._adopt(
+                report,
+                {
+                    "message": last.get("message") or "",
+                    "affected_resources": last.get("affected_resources") or [],
+                },
+            )
+            # Marqués vus seulement maintenant : `process_report` les ignorait
+            # jusqu'ici sans jamais les avoir traités.
+            for update in updates:
+                update_id = str(update.get("id"))
+                if update_id and update_id != "None":
+                    await self._bs.mark_update_seen(update_id)
+
+            newly = await self._find_by_report(report_id)
+            if newly is not None:
+                adopted.append(newly)
+        return adopted
+
     async def reconcile_betterstack(self) -> None:
         """Filet de sécurité : rattrape ce qu'un webhook manqué aurait perdu."""
         snapshot = await self._bs.poll_index()

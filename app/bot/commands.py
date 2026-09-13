@@ -124,13 +124,17 @@ class StatusCommands(app_commands.Group):
         )
 
     @app_commands.command(
-        name="reload", description="Reload every active incident's updates from Better Stack"
+        name="reload",
+        description="Reload updates from Better Stack, and adopt any incident it missed",
     )
     @staff_only()
     async def reload(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
-        synced = await interaction.client.ctx.incidents.sync_updates()
-        if not synced:
+        incidents = interaction.client.ctx.incidents
+        synced = await incidents.sync_updates()
+        adopted = await incidents.adopt_missing()
+
+        if not synced and not adopted:
             await interaction.followup.send(
                 view=_notice(
                     f"{theme.EMOJI_ALERT} Nothing to reload — no Better Stack report yet.",
@@ -139,13 +143,22 @@ class StatusCommands(app_commands.Group):
                 ephemeral=True,
             )
             return
-        count = sum(len(incident.get("updates") or []) for incident in synced)
+
+        lines = []
+        if synced:
+            count = sum(len(incident.get("updates") or []) for incident in synced)
+            lines.append(
+                f"Reloaded {count} update{'s' if count != 1 else ''} across "
+                f"{len(synced)} incident{'s' if len(synced) != 1 else ''}."
+            )
+        if adopted:
+            titles = ", ".join(f"**{i.get('title')}**" for i in adopted)
+            lines.append(
+                f"Adopted {len(adopted)} incident{'s' if len(adopted) != 1 else ''} Better Stack "
+                f"had but we'd missed: {titles}."
+            )
         await interaction.followup.send(
-            view=_notice(
-                f"{theme.EMOJI_OK} Reloaded {count} update{'s' if count != 1 else ''} across "
-                f"{len(synced)} incident{'s' if len(synced) != 1 else ''} from Better Stack.",
-                colors.ACCENT_RESOLVED,
-            ),
+            view=_notice(f"{theme.EMOJI_OK} " + " ".join(lines), colors.ACCENT_RESOLVED),
             ephemeral=True,
         )
 

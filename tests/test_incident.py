@@ -680,6 +680,40 @@ async def test_the_legacy_single_incident_format_is_migrated(manager, store):
     assert len(await manager.get_active_all()) == 2
 
 
+async def test_the_half_migrated_format_keeps_both_sides(manager, store):
+    """La forme qu'a laissée le déploiement : l'ancien incident *et* ce que la
+    version suivante a écrit par-dessus lui.
+
+    Le code d'après lisait la clé, y trouvait un dictionnaire, et y ajoutait ses
+    propres incidents comme s'il s'agissait d'une carte. Réparer l'ancien format
+    sans voir ces entrées-là perdrait l'incident adopté depuis.
+    """
+    legacy = {
+        "id": "inc_20260912_1623",
+        "title": "Ancien incident",
+        "level": colors.PARTIAL_OUTAGE,
+        "origin": "discord",
+        "status": "open",
+        "created_at": "2026-09-12T16:23:00Z",
+        "updates": [{"kind": "created", "at": "2026-09-12T16:23:00Z", "message": "m", "author": "Jules"}],
+    }
+    adopted = {
+        "id": "inc_20260913_1125",
+        "title": "Adopté depuis",
+        "level": colors.PARTIAL_OUTAGE,
+        "origin": "betterstack",
+        "status": "open",
+        "created_at": "2026-09-13T11:25:00Z",
+        "updates": [{"kind": "created", "at": "2026-09-13T11:25:00Z", "message": "m", "author": "Better Stack"}],
+    }
+    await store.set_json(keys.INCIDENT_ACTIVE, {**legacy, adopted["id"]: adopted})
+
+    actives = await manager.get_active_all()
+    assert [i["id"] for i in actives] == [legacy["id"], adopted["id"]]
+    # L'ancien incident ne garde pas l'autre collé dans ses propres champs.
+    assert adopted["id"] not in actives[0]
+
+
 async def test_sync_updates_follows_a_severity_edited_on_better_stack(polling, notifier):
     """Passer une ressource de `degraded` à `downtime` là-bas doit remonter ici.
 

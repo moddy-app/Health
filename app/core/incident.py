@@ -86,16 +86,24 @@ class IncidentManager:
         l'incident en cours au moment du déploiement disparaîtrait en silence —
         constaté en production, sticky et commandes l'avaient oublié alors
         qu'il vivait toujours sur Better Stack.
+
+        Une troisième forme existe, et c'est celle qu'a laissée ce déploiement :
+        l'ancien incident *plus* les entrées écrites par-dessus lui ensuite. Les
+        deux s'y lisent, sinon réparer la première perdrait les secondes.
         """
         data = await self._store.get_json(keys.INCIDENT_ACTIVE)
         if not isinstance(data, dict):
             return {}
-        if _is_incident(data):
-            log.info("incident %s repris de l'ancien format de stockage", data.get("id"))
-            migrated = {str(data["id"]): data}
-            await self._store.set_json(keys.INCIDENT_ACTIVE, migrated)
-            return migrated
-        return {k: v for k, v in data.items() if isinstance(v, dict)}
+
+        nested = {k: v for k, v in data.items() if isinstance(v, dict) and _is_incident(v)}
+        if not _is_incident(data):
+            return nested
+
+        legacy = {k: v for k, v in data.items() if k not in nested}
+        migrated = {str(legacy["id"]): legacy, **nested}
+        log.info("incident %s repris de l'ancien format de stockage", legacy.get("id"))
+        await self._store.set_json(keys.INCIDENT_ACTIVE, migrated)
+        return migrated
 
     async def get_active_all(self) -> list[dict]:
         """Tous les incidents actifs, dans l'ordre où ils ont été ouverts."""

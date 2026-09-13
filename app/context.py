@@ -60,7 +60,7 @@ def build_context(settings: Settings | None = None) -> Context:
     detector = Detector(settings, store)
     probe = Probe(settings, store, http)
     notifier = Notifier(settings, store, publisher, webhook)
-    incidents = IncidentManager(settings, store, betterstack, notifier)
+    incidents = IncidentManager(settings, store, betterstack, notifier, detector.impact)
     scheduler = Scheduler(settings, store, detector, incidents, notifier, betterstack, probe)
 
     bot = HealthBot(settings) if settings.bot_enabled else None

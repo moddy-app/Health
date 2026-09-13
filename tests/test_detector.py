@@ -113,7 +113,7 @@ async def test_public_payload_shape(detector, store, settings):
     await detector.run_cycle()
     snapshot = await detector.run_cycle()
 
-    payload = detector.public_payload(snapshot, None)
+    payload = detector.public_payload(snapshot, [])
     assert payload["status"] == colors.OPERATIONAL
     assert payload["incident"] is None and payload["maintenance"] is None
     assert [s["id"] for s in payload["services"]] == ["moddy-bot", "moddy-api"]
@@ -129,7 +129,7 @@ async def test_public_payload_follows_the_configured_display_order(store, settin
     await det.load()
     snapshot = await det.run_cycle()
 
-    payload = det.public_payload(snapshot, None)
+    payload = det.public_payload(snapshot, [])
     assert [s["id"] for s in payload["services"]] == ["moddy-bot", "moddy-api", "moddy-feeds"]
 
 
@@ -145,7 +145,7 @@ async def test_public_payload_splits_maintenance(detector, settings, store):
         "ends_at": "2026-08-25T04:00:00Z",
         "updates": [],
     }
-    payload = detector.public_payload(snapshot, incident)
+    payload = detector.public_payload(snapshot, [incident])
     assert payload["incident"] is None
     assert payload["maintenance"]["title"] == "Scheduled Maintenance"
     # La fenêtre planifiée doit être lisible sans passer par le bot Discord.
@@ -164,7 +164,7 @@ async def test_public_payload_has_no_window_for_a_regular_incident(detector):
         "status": "open",
         "updates": [],
     }
-    payload = detector.public_payload(snapshot, incident)
+    payload = detector.public_payload(snapshot, [incident])
     assert payload["incident"]["starts_at"] is None
     assert payload["incident"]["ends_at"] is None
 
@@ -192,7 +192,7 @@ async def test_public_status_reflects_a_manual_incident_above_the_observed_level
         "status": "open",
         "updates": [],
     }
-    payload = detector.public_payload(snapshot, incident)
+    payload = detector.public_payload(snapshot, [incident])
     assert payload["status"] == colors.DEGRADED
 
 
@@ -214,7 +214,68 @@ async def test_public_status_keeps_the_observed_level_when_more_severe(
         "status": "open",
         "updates": [],
     }
-    payload = detector.public_payload(snapshot, incident)
+    payload = detector.public_payload(snapshot, [incident])
+    assert payload["status"] == colors.MAJOR_OUTAGE
+
+
+async def test_public_payload_floors_an_affected_service_still_reporting_ok(
+    detector, store, settings
+):
+    """Un service cité dans un incident manuel ne reste pas « Operational ».
+
+    Le service continue d'envoyer des heartbeats `ok` — il n'a pas conscience
+    d'être en panne pour l'utilisateur — mais un incident a été ouvert à la
+    main dessus (`/status incident`). Sans plancher par service, la ligne du
+    sticky dirait « Operational » juste sous le titre de l'incident qui le
+    cite : la priorité doit revenir à l'incident.
+    """
+    await _beat(store, settings, "moddy-bot", status="ok")
+    await _beat(store, settings, "moddy-api", status="ok")
+    await detector.run_cycle()
+    snapshot = await detector.run_cycle()
+
+    incident = {
+        "id": "inc_6",
+        "type": "incident",
+        "level": colors.MAJOR_OUTAGE,
+        "title": "Dashboard unavailable",
+        "status": "open",
+        "affected": ["moddy-api"],
+        "updates": [],
+    }
+    payload = detector.public_payload(snapshot, [incident])
+    services = {s["id"]: s for s in payload["services"]}
+    assert services["moddy-api"]["status"] == "down"
+    assert services["moddy-api"]["reported"] == "operational"
+    # Un service non cité par l'incident garde son état observé.
+    assert services["moddy-bot"]["status"] == "operational"
+
+
+async def test_public_payload_lists_every_active_incident(detector):
+    """Plusieurs incidents actifs à la fois : tous dans `incidents`, le plus
+    sévère dans `incident` pour compatibilité descendante."""
+    snapshot = detector.current_snapshot()
+    minor = {
+        "id": "inc_a",
+        "type": "incident",
+        "level": colors.DEGRADED,
+        "title": "Minor thing",
+        "status": "open",
+        "affected": [],
+        "updates": [],
+    }
+    major = {
+        "id": "inc_b",
+        "type": "incident",
+        "level": colors.MAJOR_OUTAGE,
+        "title": "Major thing",
+        "status": "open",
+        "affected": [],
+        "updates": [],
+    }
+    payload = detector.public_payload(snapshot, [minor, major])
+    assert {i["id"] for i in payload["incidents"]} == {"inc_a", "inc_b"}
+    assert payload["incident"]["id"] == "inc_b"
     assert payload["status"] == colors.MAJOR_OUTAGE
 
 
@@ -231,5 +292,5 @@ async def test_public_status_ignores_maintenance_level(detector, settings, store
         "ends_at": "2020-01-01T04:00:00Z",
         "updates": [],
     }
-    payload = detector.public_payload(snapshot, incident)
+    payload = detector.public_payload(snapshot, [incident])
     assert payload["status"] == colors.OPERATIONAL

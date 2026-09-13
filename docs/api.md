@@ -56,6 +56,9 @@ Sans authentification. Destiné au dashboard, au site, et à tout service tiers.
       "reported": "operational", "impacted_by": ["moddy-bot"],
       "since": "2026-08-20T04:11:00Z" }
   ],
+  "incidents": [
+    { "...": "un objet par incident ou maintenance actif, même forme que `incident` ci-dessous" }
+  ],
   "incident": {
     "id": "inc_20260824_1942",
     "type": "incident",
@@ -121,12 +124,16 @@ la fenêtre planifiée (§`/status maintenance`), pas l'horodatage de publicatio
 `null`. Une maintenance qui n'a pas encore été ouverte par le staff
 n'apparaît nulle part : ce champ ne montre que ce qui est déjà publié.
 
-### `incident` et `maintenance`
+### `incidents`, `incident` et `maintenance`
 
-Les deux valent `null` quand il n'y a rien en cours. Un incident de type
-`maintenance` remplit `maintenance` et laisse `incident` à `null`, jamais les
-deux. Le dashboard n'affiche la bannière que si le champ est non-null et choisit
-sa couleur selon `level`.
+**Plusieurs incidents peuvent être actifs à la fois** (§docs/incidents.md) :
+`incidents[]` les porte tous, incidents et maintenances mélangés, chacun sous
+la même forme que `incident` ci-dessous. `incident` et `maintenance` ne
+subsistent que pour les consommateurs qui ne lisent encore que l'un des deux :
+`incident` porte le plus sévère des incidents actifs (`null` s'il n'y en a
+aucun), `maintenance` la première maintenance active (`null` sinon) — jamais
+les deux à la fois pour un même incident. Le dashboard n'affiche la bannière
+que si le champ est non-null et choisit sa couleur selon `level`.
 
 ### Protections
 

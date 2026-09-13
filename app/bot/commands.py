@@ -51,27 +51,39 @@ class StatusCommands(app_commands.Group):
         await interaction.response.send_modal(modals.IncidentCreateModal(interaction.client.ctx))
 
     @app_commands.command(
-        name="update", description="Post an update on the active incident or maintenance"
+        name="update", description="Post an update on an active incident or maintenance"
     )
     @staff_only()
     async def update(self, interaction: discord.Interaction) -> None:
-        active = await _require_active(interaction)
-        if active is None:
+        target = await _resolve_target(interaction)
+        if target is None:
             return
+        single, choices = target
         await interaction.response.send_modal(
-            modals.IncidentUpdateModal(interaction.client.ctx, maintenance=_is_maintenance(active))
+            modals.IncidentUpdateModal(
+                interaction.client.ctx,
+                incident_id=single["id"] if single else None,
+                choices=choices,
+                maintenance=bool(single) and _is_maintenance(single),
+            )
         )
 
     @app_commands.command(
-        name="resolve", description="Resolve the active incident, or close the active maintenance"
+        name="resolve", description="Resolve an active incident, or close an active maintenance"
     )
     @staff_only()
     async def resolve(self, interaction: discord.Interaction) -> None:
-        active = await _require_active(interaction)
-        if active is None:
+        target = await _resolve_target(interaction)
+        if target is None:
             return
+        single, choices = target
         await interaction.response.send_modal(
-            modals.IncidentResolveModal(interaction.client.ctx, maintenance=_is_maintenance(active))
+            modals.IncidentResolveModal(
+                interaction.client.ctx,
+                incident_id=single["id"] if single else None,
+                choices=choices,
+                maintenance=bool(single) and _is_maintenance(single),
+            )
         )
 
     @app_commands.command(name="maintenance", description="Schedule a maintenance window")
@@ -79,12 +91,20 @@ class StatusCommands(app_commands.Group):
     async def maintenance(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(modals.MaintenanceModal(interaction.client.ctx))
 
-    @app_commands.command(name="cancel", description="Cancel the active maintenance")
+    @app_commands.command(name="cancel", description="Cancel an active maintenance")
     @staff_only()
     async def cancel(self, interaction: discord.Interaction) -> None:
-        if not await _require_active_maintenance(interaction):
+        target = await _resolve_target(interaction, only_maintenance=True)
+        if target is None:
             return
-        await interaction.response.send_modal(modals.MaintenanceCancelModal(interaction.client.ctx))
+        single, choices = target
+        await interaction.response.send_modal(
+            modals.MaintenanceCancelModal(
+                interaction.client.ctx,
+                incident_id=single["id"] if single else None,
+                choices=choices,
+            )
+        )
 
     @app_commands.command(name="check", description="Detailed status, only visible to you")
     @staff_only()
@@ -104,15 +124,17 @@ class StatusCommands(app_commands.Group):
         )
 
     @app_commands.command(
-        name="reload", description="Reload the active incident's updates from Better Stack"
+        name="reload",
+        description="Reload updates from Better Stack, and adopt any incident it missed",
     )
     @staff_only()
     async def reload(self, interaction: discord.Interaction) -> None:
-        if await _require_active(interaction) is None:
-            return
         await interaction.response.defer(ephemeral=True, thinking=True)
-        incident = await interaction.client.ctx.incidents.sync_updates()
-        if incident is None:
+        incidents = interaction.client.ctx.incidents
+        synced = await incidents.sync_updates()
+        adopted = await incidents.adopt_missing()
+
+        if not synced and not adopted:
             await interaction.followup.send(
                 view=_notice(
                     f"{theme.EMOJI_ALERT} Nothing to reload — no Better Stack report yet.",
@@ -121,13 +143,22 @@ class StatusCommands(app_commands.Group):
                 ephemeral=True,
             )
             return
-        count = len(incident.get("updates") or [])
+
+        lines = []
+        if synced:
+            count = sum(len(incident.get("updates") or []) for incident in synced)
+            lines.append(
+                f"Reloaded {count} update{'s' if count != 1 else ''} across "
+                f"{len(synced)} incident{'s' if len(synced) != 1 else ''}."
+            )
+        if adopted:
+            titles = ", ".join(f"**{i.get('title')}**" for i in adopted)
+            lines.append(
+                f"Adopted {len(adopted)} incident{'s' if len(adopted) != 1 else ''} Better Stack "
+                f"had but we'd missed: {titles}."
+            )
         await interaction.followup.send(
-            view=_notice(
-                f"{theme.EMOJI_OK} Reloaded {count} update{'s' if count != 1 else ''} "
-                "from Better Stack.",
-                colors.ACCENT_RESOLVED,
-            ),
+            view=_notice(f"{theme.EMOJI_OK} " + " ".join(lines), colors.ACCENT_RESOLVED),
             ephemeral=True,
         )
 
@@ -136,36 +167,29 @@ def _is_maintenance(incident: dict) -> bool:
     return incident.get("type") == "maintenance"
 
 
-async def _require_active(interaction: discord.Interaction) -> dict | None:
+async def _resolve_target(
+    interaction: discord.Interaction, *, only_maintenance: bool = False
+) -> tuple[dict | None, list[dict] | None] | None:
     """`send_modal` ne s'annule pas : on vérifie *avant* de l'envoyer.
 
-    Rend l'incident actif — maintenance comprise : hors création, une commande
-    de gestion vaut pour l'un comme pour l'autre, seuls les mots changent.
+    Plusieurs incidents pouvant être actifs à la fois, cette étape rend soit
+    la cible unique (pas d'ambiguïté), soit la liste des choix à proposer dans
+    le modal via un `RadioGroup` — jamais les deux. `None` si rien n'est actif,
+    l'interaction ayant déjà répondu.
     """
-    active = await interaction.client.ctx.incidents.get_active()
-    if active:
-        return active
-    await interaction.response.send_message(
-        view=_notice(
-            f"{theme.EMOJI_ALERT} No active incident or maintenance.", colors.ACCENT_DEGRADED
-        ),
-        ephemeral=True,
-    )
-    return None
-
-
-async def _require_active_maintenance(interaction: discord.Interaction) -> bool:
-    """`/status resolve` clôt n'importe quel incident : `/status cancel` ne
-    doit annuler qu'une maintenance — se tromper de commande sur un incident
-    ordinaire prêterait à confusion."""
-    active = await interaction.client.ctx.incidents.get_active()
-    if active and active.get("type") == "maintenance":
-        return True
-    await interaction.response.send_message(
-        view=_notice(f"{theme.EMOJI_ALERT} No active maintenance.", colors.ACCENT_DEGRADED),
-        ephemeral=True,
-    )
-    return False
+    actives = await interaction.client.ctx.incidents.get_active_all()
+    if only_maintenance:
+        actives = [i for i in actives if i.get("type") == "maintenance"]
+    if not actives:
+        label = "maintenance" if only_maintenance else "incident or maintenance"
+        await interaction.response.send_message(
+            view=_notice(f"{theme.EMOJI_ALERT} No active {label}.", colors.ACCENT_DEGRADED),
+            ephemeral=True,
+        )
+        return None
+    if len(actives) == 1:
+        return actives[0], None
+    return None, actives
 
 
 async def on_tree_error(interaction: discord.Interaction, error: Exception) -> None:

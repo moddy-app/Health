@@ -91,8 +91,8 @@ class Scheduler:
         snapshot = await self._detector.run_cycle()
         await self._incidents.reconcile(snapshot)
 
-        incident = await self._incidents.get_active()
-        public = self._detector.public_payload(snapshot, incident)
+        incidents = await self._incidents.get_active_all()
+        public = self._detector.public_payload(snapshot, incidents)
         await self._store.set_json(keys.STATUS_PUBLIC, public, ttl=self._s.hm_public_cache_ttl)
 
         if snapshot.level != self._last_level:

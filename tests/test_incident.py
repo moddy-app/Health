@@ -1,4 +1,4 @@
-"""Cycle de vie des incidents : un seul actif, enrichi puis archivé."""
+"""Cycle de vie des incidents : plusieurs actifs à la fois, gérés indépendamment."""
 
 from __future__ import annotations
 
@@ -49,17 +49,19 @@ def notifier():
     return StubNotifier()
 
 
+def _impact_graph(settings) -> ImpactGraph:
+    return ImpactGraph(settings.hm_impact_map, settings.known_services, monitored=settings.services)
+
+
 @pytest.fixture
 def manager(settings, store, notifier):
-    return IncidentManager(settings, store, BetterStack(settings, store), notifier)
+    return IncidentManager(settings, store, BetterStack(settings, store), notifier, _impact_graph(settings))
 
 
 @pytest.fixture
 def snapshot(settings):
     """Construit un Snapshot en passant par la vraie propagation d'impact."""
-    graph = ImpactGraph(
-        settings.hm_impact_map, settings.known_services, monitored=settings.services
-    )
+    graph = _impact_graph(settings)
 
     def _snapshot(
         level: str,
@@ -82,11 +84,18 @@ def snapshot(settings):
     return _snapshot
 
 
+async def _solo(manager: IncidentManager) -> dict:
+    """L'unique incident actif — échoue s'il y en a zéro ou plusieurs."""
+    actives = await manager.get_active_all()
+    assert len(actives) == 1, actives
+    return actives[0]
+
+
 async def test_open_update_resolve(manager, notifier, store, snapshot):
     await manager.reconcile(
         snapshot(colors.PARTIAL_OUTAGE, {"moddy-bot": DOWN, "moddy-api": OPERATIONAL})
     )
-    incident = await manager.get_active()
+    incident = await _solo(manager)
     assert incident["origin"] == "auto"
     assert incident["level"] == colors.PARTIAL_OUTAGE
     # Le bot tombe : tout le reste est dégradé par ricochet.
@@ -101,9 +110,10 @@ async def test_open_update_resolve(manager, notifier, store, snapshot):
     assert incident["title"] == "Partial Outage – Moddy Bot Unavailable"
     assert "API, Website & Dashboard may be degraded as a result." in incident["message"]
 
-    # Un second service tombe : on enrichit l'incident, on n'en crée pas un autre.
+    # Un second service tombe, relié au premier par le graphe d'impact : on
+    # enrichit l'incident, on n'en crée pas un autre.
     await manager.reconcile(snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": DOWN, "moddy-api": DOWN}))
-    incident = await manager.get_active()
+    incident = await _solo(manager)
     assert incident["level"] == colors.MAJOR_OUTAGE
     assert incident["title"] == "Partial Outage – Moddy Bot Unavailable"  # titre figé à l'ouverture
     assert len(incident["updates"]) == 2
@@ -113,29 +123,83 @@ async def test_open_update_resolve(manager, notifier, store, snapshot):
     await manager.reconcile(
         snapshot(colors.OPERATIONAL, {"moddy-bot": OPERATIONAL, "moddy-api": OPERATIONAL})
     )
-    assert await manager.get_active() is None
+    assert await manager.get_active_all() == []
     history = await manager.history()
     assert history[0]["status"] == "resolved"
     assert history[0]["resolved_at"]
     assert history[0]["updates"][-1]["kind"] == "resolved"
 
 
+async def test_an_unrelated_service_opens_a_separate_incident(store, notifier):
+    """Le cas signalé : deux pannes sans rapport ne doivent pas se mélanger.
+
+    Sans `HM_IMPACT_MAP` pour les relier, `moddy-bot` et `moddy-api` tombant en
+    même temps n'ont rien à voir l'un avec l'autre — chacun ouvre son propre
+    incident, géré indépendamment.
+    """
+    from app.config import Settings
+
+    settings = Settings(
+        redis_url="",
+        hm_services="moddy-bot,moddy-api",
+        hm_critical_services="",
+        hm_impact_map="",
+        hm_failure_threshold=3,
+        hm_recovery_threshold=2,
+        hm_startup_grace=0,
+        hm_min_silence=0,
+    )
+    manager = IncidentManager(settings, store, BetterStack(settings, store), notifier, _impact_graph(settings))
+    graph = _impact_graph(settings)
+
+    def snap(statuses: dict[str, str]) -> Snapshot:
+        effective, impacted_by = graph.apply(statuses)
+        return Snapshot(
+            level=colors.DEGRADED,
+            updated_at=iso(),
+            services={n: ServiceState(service=n, status=s) for n, s in statuses.items()},
+            effective=effective,
+            impacted_by=impacted_by,
+        )
+
+    # Le dashboard (ici `moddy-bot`) tombe en premier.
+    await manager.reconcile(snap({"moddy-bot": DOWN, "moddy-api": OPERATIONAL}))
+    first = await manager.get_active_all()
+    assert len(first) == 1
+    assert first[0]["roots"] == ["moddy-bot"]
+
+    # Un service sans rapport tombe à son tour : un second incident, distinct.
+    await manager.reconcile(snap({"moddy-bot": DOWN, "moddy-api": DOWN}))
+    actives = await manager.get_active_all()
+    assert len(actives) == 2
+    ids = {i["id"] for i in actives}
+    assert first[0]["id"] in ids
+    roots = {i["id"]: i["roots"] for i in actives}
+    assert sorted(roots.values()) == [["moddy-api"], ["moddy-bot"]]
+
+    # Le premier se rétablit : seul le sien se résout, l'autre continue sa vie.
+    await manager.reconcile(snap({"moddy-bot": OPERATIONAL, "moddy-api": DOWN}))
+    actives = await manager.get_active_all()
+    assert len(actives) == 1
+    assert actives[0]["roots"] == ["moddy-api"]
+
+
 async def test_grace_period_blocks_every_alert(manager, notifier, snapshot):
     snap = snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": DOWN, "moddy-api": DOWN})
     snap.in_grace = True
     await manager.reconcile(snap)
-    assert await manager.get_active() is None
+    assert await manager.get_active_all() == []
     assert notifier.dispatched == []
 
 
 async def test_rate_limit_defers_the_alert(manager, notifier, snapshot):
     notifier.allowed = False
     await manager.reconcile(snapshot(colors.PARTIAL_OUTAGE, {"moddy-bot": DOWN}))
-    assert await manager.get_active() is None
+    assert await manager.get_active_all() == []
 
     notifier.allowed = True
     await manager.reconcile(snapshot(colors.PARTIAL_OUTAGE, {"moddy-bot": DOWN}))
-    assert await manager.get_active() is not None
+    assert await manager.get_active_all() != []
 
 
 async def test_unchanged_state_does_not_spam_updates(manager, notifier, snapshot):
@@ -143,7 +207,7 @@ async def test_unchanged_state_does_not_spam_updates(manager, notifier, snapshot
     await manager.reconcile(snap)
     await manager.reconcile(snap)
     await manager.reconcile(snap)
-    assert len((await manager.get_active())["updates"]) == 1
+    assert len((await _solo(manager))["updates"]) == 1
 
 
 async def test_a_degraded_incident_is_published_too(mapped_settings, store, notifier, snapshot):
@@ -155,10 +219,10 @@ async def test_a_degraded_incident_is_published_too(mapped_settings, store, noti
         return {"data": {"id": "555", "relationships": {}}}
 
     bs._request = fake_request
-    manager = IncidentManager(mapped_settings, store, bs, notifier)
+    manager = IncidentManager(mapped_settings, store, bs, notifier, _impact_graph(mapped_settings))
 
     await manager.reconcile(snapshot(colors.DEGRADED, {"moddy-bot": "degraded"}))
-    incident = await manager.get_active()
+    incident = await _solo(manager)
     assert incident["type"] == TYPE_DEGRADED
     assert incident["bs_report_id"] == "555"
 
@@ -176,7 +240,7 @@ async def test_recovery_gives_the_service_back_its_right_to_alert(manager, notif
 
 
 async def test_staff_command_opens_then_resolves(manager):
-    await manager.handle_command(
+    incident = await manager.handle_command(
         "incident.create",
         {
             "title": "Manual incident",
@@ -186,25 +250,32 @@ async def test_staff_command_opens_then_resolves(manager):
             "author": "Jules",
         },
     )
-    incident = await manager.get_active()
     assert incident["origin"] == "discord"
     assert incident["created_by"] == "Jules"
+    incident_id = incident["id"]
 
-    await manager.handle_command("incident.update", {"message": "Fix deployed.", "author": "Jules"})
-    assert len((await manager.get_active())["updates"]) == 2
+    await manager.handle_command(
+        "incident.update",
+        {"incident_id": incident_id, "message": "Fix deployed.", "author": "Jules"},
+    )
+    assert len((await manager.get_active(incident_id))["updates"]) == 2
 
-    await manager.handle_command("incident.resolve", {"message": "Done.", "author": "Jules"})
-    assert await manager.get_active() is None
+    await manager.handle_command(
+        "incident.resolve",
+        {"incident_id": incident_id, "message": "Done.", "author": "Jules"},
+    )
+    assert await manager.get_active(incident_id) is None
 
 
-async def test_second_create_command_enriches_the_active_incident(manager):
+async def test_second_create_command_always_opens_a_new_incident(manager):
+    """`/status incident` n'enrichit plus jamais l'existant : plusieurs incidents
+    gérés à la fois, chacun individuellement — voir `/status update`."""
     payload = {"title": "A", "message": "m", "level": colors.PARTIAL_OUTAGE, "affected": ["moddy-api"]}
-    await manager.handle_command("incident.create", payload)
-    first_id = (await manager.get_active())["id"]
-    await manager.handle_command("incident.create", {**payload, "title": "B"})
-    active = await manager.get_active()
-    assert active["id"] == first_id
-    assert len(active["updates"]) == 2
+    first = await manager.handle_command("incident.create", payload)
+    second = await manager.handle_command("incident.create", {**payload, "title": "B"})
+    assert first["id"] != second["id"]
+    actives = await manager.get_active_all()
+    assert {i["id"] for i in actives} == {first["id"], second["id"]}
 
 
 async def test_maintenance_requires_ends_at(manager):
@@ -214,7 +285,7 @@ async def test_maintenance_requires_ends_at(manager):
         "maintenance.create",
         {"title": "M", "message": "m", "affected": ["moddy-api"], "ends_at": iso()},
     )
-    assert (await manager.get_active())["type"] == TYPE_MAINTENANCE
+    assert (await _solo(manager))["type"] == TYPE_MAINTENANCE
 
 
 async def test_a_maintenance_absorbs_the_detection_instead_of_being_updated(manager, snapshot):
@@ -237,7 +308,7 @@ async def test_a_maintenance_absorbs_the_detection_instead_of_being_updated(mana
     for status in (DOWN, OPERATIONAL, DOWN):
         await manager.reconcile(snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": status}))
 
-    incident = await manager.get_active()
+    incident = await _solo(manager)
     assert incident["type"] == TYPE_MAINTENANCE
     assert len(incident["updates"]) == 1
 
@@ -258,12 +329,12 @@ async def test_a_finished_maintenance_gives_the_detection_back(manager, snapshot
         },
     )
     await manager.reconcile(snapshot(colors.OPERATIONAL, {"moddy-bot": OPERATIONAL}))
-    assert await manager.get_active() is None
+    assert await manager.get_active_all() == []
     assert (await manager.history())[0]["type"] == TYPE_MAINTENANCE
 
     # Et la détection reprend son cours sur l'incident suivant.
     await manager.reconcile(snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": DOWN}))
-    incident = await manager.get_active()
+    incident = await _solo(manager)
     assert incident["origin"] == "auto"
     assert incident["type"] != TYPE_MAINTENANCE
 
@@ -285,9 +356,9 @@ async def test_closing_a_maintenance_early_closes_its_window_too(
         return {"data": {"id": "1032967", "relationships": {}}}
 
     bs._request = fake_request
-    manager = IncidentManager(mapped_settings, store, bs, notifier)
+    manager = IncidentManager(mapped_settings, store, bs, notifier, _impact_graph(mapped_settings))
 
-    await manager.handle_command(
+    incident = await manager.handle_command(
         "maintenance.create",
         {
             "title": "DNS Migration",
@@ -297,7 +368,10 @@ async def test_closing_a_maintenance_early_closes_its_window_too(
             "ends_at": iso(utcnow() + timedelta(hours=2)),
         },
     )
-    await manager.handle_command("incident.resolve", {"message": "Cancelled.", "author": "Jules"})
+    await manager.handle_command(
+        "incident.resolve",
+        {"incident_id": incident["id"], "message": "Cancelled.", "author": "Jules"},
+    )
 
     patches = [payload for method, _, payload in calls if method == "PATCH"]
     assert patches, "la fenêtre doit être refermée côté Better Stack"
@@ -318,9 +392,9 @@ async def test_a_maintenance_whose_window_already_passed_is_not_patched(
         return {"data": {"id": "1032967", "relationships": {}}}
 
     bs._request = fake_request
-    manager = IncidentManager(mapped_settings, store, bs, notifier)
+    manager = IncidentManager(mapped_settings, store, bs, notifier, _impact_graph(mapped_settings))
 
-    await manager.handle_command(
+    incident = await manager.handle_command(
         "maintenance.create",
         {
             "title": "DNS Migration",
@@ -330,7 +404,10 @@ async def test_a_maintenance_whose_window_already_passed_is_not_patched(
             "ends_at": iso(utcnow() - timedelta(hours=1)),
         },
     )
-    await manager.handle_command("incident.resolve", {"message": "Done.", "author": "Jules"})
+    await manager.handle_command(
+        "incident.resolve",
+        {"incident_id": incident["id"], "message": "Done.", "author": "Jules"},
+    )
     assert "PATCH" not in calls
 
 
@@ -355,7 +432,7 @@ async def test_a_stable_outage_stops_producing_updates(manager, snapshot, notifi
     for _ in range(10):
         await manager.reconcile(snapshot(colors.MAJOR_OUTAGE, down))
 
-    assert len((await manager.get_active())["updates"]) == 1
+    assert len((await _solo(manager))["updates"]) == 1
 
 
 async def test_an_adopted_incident_stops_producing_updates(manager, snapshot, store):
@@ -364,7 +441,7 @@ async def test_an_adopted_incident_stops_producing_updates(manager, snapshot, st
         title="Billing issue",
         message="...",
         level=colors.PARTIAL_OUTAGE,
-        affected=[],
+        affected=["moddy-bot", "moddy-api"],
         origin="betterstack",
         bs_report_id="995593",
     )
@@ -372,7 +449,7 @@ async def test_an_adopted_incident_stops_producing_updates(manager, snapshot, st
     for _ in range(10):
         await manager.reconcile(snapshot(colors.MAJOR_OUTAGE, down))
 
-    incident = await manager.get_active()
+    incident = await _solo(manager)
     # Un seul update : celui qui apporte réellement les services affectés.
     assert len(incident["updates"]) == 2
     # Le niveau d'un incident ouvert ailleurs n'est pas réécrit par la détection.
@@ -397,7 +474,7 @@ async def test_a_real_transition_is_always_reported(manager, snapshot, notifier)
     await manager.reconcile(
         snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": DOWN, "moddy-api": DOWN})
     )
-    assert len((await manager.get_active())["updates"]) == 2
+    assert len((await _solo(manager))["updates"]) == 2
 
 
 async def test_one_update_per_change_and_not_one_more(manager, snapshot):
@@ -415,26 +492,26 @@ async def test_one_update_per_change_and_not_one_more(manager, snapshot):
     for statuses, expected in steps:
         level = colors.MAJOR_OUTAGE if statuses["moddy-api"] == DOWN else colors.PARTIAL_OUTAGE
         await manager.reconcile(snapshot(level, statuses))
-        assert len((await manager.get_active())["updates"]) == expected
+        assert len((await _solo(manager))["updates"]) == expected
 
 
 async def test_a_service_going_from_degraded_to_down_is_a_change(manager, snapshot):
     """`affected` ne distingue pas les deux : la signature, si."""
     await manager.reconcile(snapshot(colors.PARTIAL_OUTAGE, {"moddy-bot": DEGRADED}))
-    before = len((await manager.get_active())["updates"])
+    before = len((await _solo(manager))["updates"])
 
     await manager.reconcile(snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": DOWN}))
-    assert len((await manager.get_active())["updates"]) == before + 1
+    assert len((await _solo(manager))["updates"]) == before + 1
 
 
 async def test_a_staff_update_is_never_deduplicated(manager):
     """Le staff a le droit de répéter : la garde ne vaut que pour l'automatique."""
-    await manager.open(
+    incident = await manager.open(
         title="A", message="m", level=colors.PARTIAL_OUTAGE, affected=["moddy-api"], origin="discord"
     )
-    await manager.add_update(message="m", author="Jules")
-    await manager.add_update(message="m", author="Jules")
-    assert len((await manager.get_active())["updates"]) == 3
+    await manager.add_update(incident["id"], message="m", author="Jules")
+    await manager.add_update(incident["id"], message="m", author="Jules")
+    assert len((await manager.get_active(incident["id"]))["updates"]) == 3
 
 
 class StubIndex:
@@ -451,12 +528,13 @@ class StubIndex:
         return self
 
 
-def report(report_id: str, *, message: str, at: str) -> dict:
+def report(report_id: str, *, message: str, at: str, aggregate_state: str | None = None) -> dict:
     return {
         "id": report_id,
         "title": "Billing issue",
         "report_type": "manual",
         "updated_at": at,
+        "aggregate_state": aggregate_state,
         "updates": [{"id": f"u{report_id}", "message": message, "published_at": at}],
     }
 
@@ -468,7 +546,7 @@ def polling(settings, store, notifier):
     def _polling(reports: list[dict]) -> IncidentManager:
         bs = BetterStack(settings, store)
         bs.poll_index = StubIndex(reports)
-        return IncidentManager(settings, store, bs, notifier)
+        return IncidentManager(settings, store, bs, notifier, _impact_graph(settings))
 
     return _polling
 
@@ -482,7 +560,7 @@ async def test_the_first_poll_takes_the_history_for_granted(polling):
     manager = polling([report("995593", message="Fully restored.", at=iso())])
 
     await manager.reconcile_betterstack()
-    assert await manager.get_active() is None
+    assert await manager.get_active_all() == []
 
 
 async def test_an_archived_report_is_never_adopted(polling, store):
@@ -491,7 +569,7 @@ async def test_an_archived_report_is_never_adopted(polling, store):
     manager = polling([report("995593", message="Restored.", at="2026-01-01T00:00:00Z")])
 
     await manager.reconcile_betterstack()
-    assert await manager.get_active() is None
+    assert await manager.get_active_all() == []
 
 
 async def test_a_fresh_foreign_incident_is_still_adopted(polling, store):
@@ -499,10 +577,73 @@ async def test_a_fresh_foreign_incident_is_still_adopted(polling, store):
     manager = polling([report("1019848", message="We are investigating.", at=iso())])
 
     await manager.reconcile_betterstack()
-    incident = await manager.get_active()
-    assert incident is not None
+    incident = await _solo(manager)
     assert incident["origin"] == "betterstack"
     assert incident["bs_report_id"] == "1019848"
+
+
+async def test_adopt_missing_recovers_an_incident_the_bootstrap_swallowed(polling):
+    """Le cas signalé : un incident en cours côté Better Stack, jamais chargé
+    ici — parce que le tout premier poll l'a pris pour de l'archive. `reload`
+    doit quand même l'envoyer, sans attendre que le webhook ou le poll
+    automatique ne le revoient jamais (ils ne le reverront pas : ses updates
+    sont déjà marqués vus)."""
+    manager = polling([report("995593", message="Still ongoing.", at=iso())])
+
+    await manager.reconcile_betterstack()  # premier poll : avalé sans être chargé
+    assert await manager.get_active_all() == []
+
+    adopted = await manager.adopt_missing()
+    assert len(adopted) == 1
+    assert adopted[0]["bs_report_id"] == "995593"
+    incident = await _solo(manager)
+    assert incident["origin"] == "betterstack"
+
+    # Rejoué, il ne duplique pas : l'incident est maintenant suivi.
+    assert await manager.adopt_missing() == []
+
+
+async def test_adopt_missing_skips_a_report_actually_resolved(polling):
+    """Ce qui est réellement clos côté Better Stack ne doit pas être rouvert ici."""
+    manager = polling(
+        [report("995593", message="Restored.", at="2026-01-01T00:00:00Z", aggregate_state="resolved")]
+    )
+
+    await manager.reconcile_betterstack()  # avalé par l'amorçage, comme ci-dessus
+    assert await manager.adopt_missing() == []
+    assert await manager.get_active_all() == []
+
+
+async def test_adopt_missing_ignores_an_incident_already_tracked_locally(polling, store):
+    """Ne réadopte pas ce qui est déjà suivi — `sync_updates` s'en charge."""
+    await store.set(keys.BS_CURSOR, iso())
+    manager = polling([report("995593", message="Investigating.", at=iso())])
+    await manager.open(
+        title="Billing issue",
+        message="Investigating.",
+        level=colors.PARTIAL_OUTAGE,
+        affected=["moddy-api"],
+        origin="discord",
+        bs_report_id="995593",
+    )
+
+    assert await manager.adopt_missing() == []
+    assert len(await manager.get_active_all()) == 1
+
+
+async def test_a_second_foreign_incident_is_adopted_independently(polling, store):
+    """Plusieurs incidents Better Stack peuvent être actifs à la fois."""
+    await store.set(keys.BS_CURSOR, iso())
+    manager = polling(
+        [
+            report("1019848", message="We are investigating.", at=iso()),
+            report("1019849", message="Something else entirely.", at=iso()),
+        ]
+    )
+
+    await manager.reconcile_betterstack()
+    actives = await manager.get_active_all()
+    assert {i["bs_report_id"] for i in actives} == {"1019848", "1019849"}
 
 
 @pytest.fixture
@@ -556,10 +697,10 @@ async def test_an_adopted_incident_names_its_affected_services(mapped_settings, 
 
     bs._request = _never
 
-    manager = IncidentManager(mapped_settings, store, bs, notifier)
+    manager = IncidentManager(mapped_settings, store, bs, notifier, _impact_graph(mapped_settings))
     await manager.reconcile_betterstack()
 
-    incident = await manager.get_active()
+    incident = await _solo(manager)
     assert incident["affected"] == ["moddy-bot"]
     assert incident["level"] == colors.PARTIAL_OUTAGE
     # Le report existe déjà là-bas : lui renvoyer son propre message bouclerait.
@@ -602,9 +743,10 @@ async def test_sync_updates_reloads_a_correction_made_on_better_stack(polling, n
         bs_report_id="995593",
     )
 
-    incident = await manager.sync_updates()
+    synced = await manager.sync_updates()
 
-    assert incident is not None
+    assert len(synced) == 1
+    incident = synced[0]
     assert [u["message"] for u in incident["updates"]] == [
         "Investigating.",
         "Fix deployed (corrected wording).",
@@ -619,11 +761,11 @@ async def test_sync_updates_without_a_report_does_nothing(polling, notifier):
     await manager.open(
         title="A", message="m", level=colors.PARTIAL_OUTAGE, affected=["moddy-api"], origin="discord"
     )
-    assert await manager.sync_updates() is None
+    assert await manager.sync_updates() == []
     assert notifier.re_rendered == []
 
 
 async def test_sync_updates_without_an_active_incident_does_nothing(polling, notifier):
     manager = polling([])
-    assert await manager.sync_updates() is None
+    assert await manager.sync_updates() == []
     assert notifier.re_rendered == []

@@ -63,10 +63,10 @@ async def heartbeat(body: Heartbeat, ctx: Context = Depends(require_token)) -> d
         keys.hb(body.service), record, ttl=ctx.settings.hm_heartbeat_ttl
     )
 
-    incident = await ctx.incidents.get_active()
+    incidents = await ctx.incidents.get_active_all()
     return {
         "ok": True,
         "received_at": received_at,
         # Permet au service de dégrader son propre comportement pendant une crise.
-        "incident_active": bool(incident and incident.get("status") != "resolved"),
+        "incident_active": bool(incidents),
     }

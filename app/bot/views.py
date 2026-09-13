@@ -133,13 +133,12 @@ class StickyStatusView(BaseView):
         container = ui.Container(accent_color=snapshot.accent if snapshot else None)
         if snapshot is not None:
             container.add_item(ui.TextDisplay(status_summary(snapshot)))
-            if snapshot.incident_title:
+            if snapshot.incidents:
                 container.add_item(ui.Separator(spacing=discord.SeparatorSpacing.small))
-                # `OnGoing`/`Resolved` sont réservés à la ligne « Status: » du
-                # message d'incident : ici, l'icône de niveau s'applique.
-                container.add_item(
-                    ui.TextDisplay(f"{snapshot.incident_icon} **{snapshot.incident_title}**")
-                )
+                # Un incident par ligne : plusieurs peuvent être actifs à la fois
+                # (§docs/incidents.md), chacun garde sa propre icône.
+                for incident in snapshot.incidents:
+                    container.add_item(ui.TextDisplay(f"{incident.icon} **{incident.title}**"))
         else:
             container.add_item(ui.TextDisplay("### Status"))
 

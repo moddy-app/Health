@@ -60,7 +60,7 @@ def test_heartbeat_keeps_free_form_checks_untouched(client):
 
 def test_status_shape(client):
     body = client.get("/v1/status").json()
-    assert set(body) == {"status", "updated_at", "services", "incident", "maintenance"}
+    assert set(body) == {"status", "updated_at", "services", "incident", "maintenance", "incidents"}
     assert [s["id"] for s in body["services"]] == ["moddy-bot", "moddy-api"]
     assert set(body["services"][0]) == {
         "id",
@@ -125,7 +125,7 @@ async def test_banner_message_names_the_caller_when_it_is_affected(client):
 
 async def test_banner_message_reflects_degraded_and_maintenance(client):
     ctx = client.app.state.ctx
-    await ctx.incidents.open(
+    degraded = await ctx.incidents.open(
         title="Degraded",
         message="m",
         level="degraded",
@@ -140,7 +140,7 @@ async def test_banner_message_reflects_degraded_and_maintenance(client):
         "[View status](https://status.moddy.app)"
     )
 
-    await ctx.incidents.resolve(message="fixed")
+    await ctx.incidents.resolve(degraded["id"], message="fixed")
     await ctx.incidents.open(
         title="Maintenance",
         message="m",

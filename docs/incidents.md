@@ -1,8 +1,12 @@
 # Cycle de vie d'un incident
 
-`app/core/incident.py`. **Un seul incident actif à la fois**, dans
-`hm:incident:active`. Si un nouveau service tombe pendant un incident en cours,
-on met à jour l'existant plutôt que d'en créer un second.
+`app/core/incident.py`. **Plusieurs incidents peuvent être actifs à la fois**,
+dans `hm:incident:active` (un dictionnaire `{id: incident}`). Un nouveau
+service qui tombe n'enrichit un incident existant que s'il lui est *relié* —
+par le graphe d'impact (`HM_IMPACT_MAP`) pour la détection auto, par ses
+`affected` déjà déclarés pour un incident manuel ou Better Stack. Un service
+qui n'a rien à voir en ouvre un second, géré indépendamment : `/status update`
+et `/status resolve` demandent alors lequel viser.
 
 ## Les trois origines
 
@@ -70,22 +74,34 @@ issu du `shortlink` Better Stack quand il est disponible, reconstruit sinon).
 
 ## Réconciliation automatique
 
-`reconcile(snapshot)`, appelé à chaque cycle :
+`reconcile(snapshot)`, appelé à chaque cycle : les causes racines qui tombent
+(`snapshot.failing`) sont d'abord regroupées en **clusters** — les services
+reliés entre eux par `HM_IMPACT_MAP` (directement, ou en chaîne). Chaque
+cluster est traité indépendamment :
 
 ```
-grace period          -> ne rien faire
-niveau operational    -> résoudre l'incident actif s'il est d'origine `auto`
-aucun incident actif  -> en ouvrir un, si le rate-limit le permet
-incident actif        -> le mettre à jour si `affected` ou `level` a changé,
-                         et si le rate-limit le permet
+grace period               -> ne rien faire
+maintenance active         -> ne rien faire (toute la détection auto, pas
+                               seulement les services qu'elle couvre)
+un incident auto par cluster dont plus aucune racine ne dure -> le résoudre
+pour chaque cluster de causes racines encore en panne :
+    aucun incident ne le couvre -> en ouvrir un, si le rate-limit le permet
+    un incident le couvre déjà  -> le mettre à jour si l'état a changé,
+                                    et si le rate-limit le permet
 ```
+
+Un cluster « couvre » un incident auto si ses racines recoupent les `roots`
+déjà suivis par cet incident ; il couvre un incident manuel ou Better Stack si
+ses services recoupent ses `affected` déjà déclarés. Sans recoupement, un
+nouveau cluster ouvre un **nouvel** incident — deux pannes sans rapport ne se
+mélangent jamais, même actives en même temps.
 
 Un incident ouvert à la main ou venu de Better Stack est **enrichi** par la
-détection (sa liste `affected` suit l'état réel) mais n'est jamais résolu
-automatiquement ni requalifié en niveau : c'est un humain qui l'a ouvert, c'est
-un humain qui le ferme.
+détection quand elle retombe sur ses propres services (sa liste `affected`
+suit l'état réel) mais n'est jamais résolu automatiquement ni requalifié en
+niveau : c'est un humain qui l'a ouvert, c'est un humain qui le ferme.
 
-Le rate-limit porte sur les **causes racines** (`snapshot.failing`), pas sur les
+Le rate-limit porte sur les **causes racines** d'un cluster, pas sur les
 services dégradés par ricochet : sinon un seul incident consommerait la fenêtre
 de tous les services à la fois.
 
@@ -206,14 +222,16 @@ pour clore une maintenance : elle se termine par sa fenêtre, pas par un
 
 | Action | Payload | Effet |
 |---|---|---|
-| `incident.create` | `title`, `message`, `level`, `affected`, `notify`, `author` | Ouvre, ou enrichit l'incident actif |
-| `incident.update` | `message`, `level?`, `affected?`, `notify`, `author` | Ajoute un update |
-| `incident.resolve` | `message`, `notify`, `author` | Résout |
+| `incident.create` | `title`, `message`, `level`, `affected`, `notify`, `author` | Ouvre un nouvel incident |
+| `incident.update` | `incident_id`, `message`, `level?`, `affected?`, `notify`, `author` | Ajoute un update à cet incident |
+| `incident.resolve` | `incident_id`, `message`, `notify`, `author` | Résout cet incident |
 | `maintenance.create` | + `starts_at`, `ends_at` | Ouvre une maintenance |
 
-Une commande `incident.create` alors qu'un incident est déjà actif **enrichit**
-l'existant : la règle « un seul incident à la fois » ne souffre pas d'exception,
-même manuelle.
+`incident.create` ouvre **toujours** un incident distinct, même si d'autres
+sont déjà actifs — plusieurs peuvent l'être à la fois, gérés indépendamment.
+Enrichir un incident existant se fait via `/status update`, qui exige
+`incident_id` : le bot ne le demande au staff (un `RadioGroup` dans le modal)
+que s'il y a plus d'un incident actif à ce moment-là.
 
 ## Retour Better Stack
 
@@ -223,7 +241,8 @@ même traitement, décrit dans [betterstack.md](betterstack.md#anti-boucle).
 - update sur un report que **nous** avons créé → relayé vers Discord, sans
   réécriture vers Better Stack (ce serait la boucle) ;
 - report créé **hors** du monitor → adopté comme incident local d'origine
-  `betterstack`, sauf si un incident est déjà actif.
+  `betterstack`, indépendant de tout autre incident déjà actif — plusieurs
+  peuvent l'être à la fois.
 
 ## Historique
 

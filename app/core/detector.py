@@ -243,29 +243,47 @@ class Detector:
         return colors.OPERATIONAL
 
     # ------------------------------------------------------------------
-    def public_payload(self, snapshot: Snapshot, incident: dict | None) -> dict:
+    def public_payload(self, snapshot: Snapshot, incidents: list[dict]) -> dict:
         """Réponse pré-calculée de `/v1/status`.
 
         Calculée dans la boucle de check, pas à la requête : l'endpoint ne fait
-        que servir une clé Redis.
+        que servir une clé Redis. Plusieurs incidents peuvent être actifs à la
+        fois (§docs/incidents.md) : `incidents` les porte tous, `incident` et
+        `maintenance` n'y survivent que pour les consommateurs qui ne lisent
+        encore que l'un des deux.
         """
-        maintenance = incident if incident and incident.get("type") == "maintenance" else None
-        active = None if maintenance else incident
+        actives = [i for i in incidents if i.get("type") != "maintenance"]
+        maintenances = [i for i in incidents if i.get("type") == "maintenance"]
 
         # L'ordre d'affichage vient de la configuration : le payload est la
         # seule liste ordonnée que lisent le sticky, le panneau de détail et le
         # dashboard.
         ordered = self._s.display_order(list(snapshot.services))
 
+        level = snapshot.level
+        floors: dict[str, str] = {}
+        for incident in actives:
+            floor = _incident_service_floor(incident.get("level"))
+            level = _floor_level(level, incident.get("level"))
+            if not floor:
+                continue
+            for service in incident.get("affected") or []:
+                if _SERVICE_SEVERITY.get(floor, 0) > _SERVICE_SEVERITY.get(floors.get(service, OPERATIONAL), 0):
+                    floors[service] = floor
+
         return {
-            "status": _public_status(snapshot.level, active),
+            "status": level,
             "updated_at": snapshot.updated_at,
             "services": [
                 {
                     "id": service,
                     "name": self._s.display_name(service),
-                    # Ce que vit l'utilisateur, propagation d'impact comprise.
-                    "status": snapshot.effective.get(service, snapshot.services[service].status),
+                    # Ce que vit l'utilisateur, propagation d'impact comprise —
+                    # et jamais moins sévère qu'un incident manuel qui le cite.
+                    "status": _service_status_floor(
+                        snapshot.effective.get(service, snapshot.services[service].status),
+                        floors.get(service),
+                    ),
                     # Ce que le service dit de lui-même.
                     "reported": snapshot.services[service].status,
                     "impacted_by": snapshot.impacted_by.get(service, []),
@@ -273,13 +291,14 @@ class Detector:
                 }
                 for service in ordered
             ],
-            "incident": _public_incident(active),
-            "maintenance": _public_incident(maintenance),
+            "incidents": [_public_incident(i) for i in incidents],
+            "incident": _public_incident(_primary(actives)),
+            "maintenance": _public_incident(_primary(maintenances)),
         }
 
 
-def _public_status(observed: str, active: dict | None) -> str:
-    """Le niveau affiché ne peut pas être moins sévère que l'incident actif.
+def _floor_level(observed: str, incident_level: str | None) -> str:
+    """Le niveau affiché ne peut pas être moins sévère que le pire incident actif.
 
     `aggregate()` ne connaît que les heartbeats : un incident ouvert à la main
     (`/status incident`) peut annoncer `degraded` alors que le service se
@@ -287,12 +306,49 @@ def _public_status(observed: str, active: dict | None) -> str:
     du sticky dirait « All systems operational » juste au-dessus du titre de
     l'incident en cours — les deux lignes se contrediraient.
     """
-    if not active:
-        return observed
-    level = active.get("level")
-    if level and colors.SEVERITY_ORDER.get(level, 0) > colors.SEVERITY_ORDER.get(observed, 0):
-        return level
+    if incident_level and colors.SEVERITY_ORDER.get(incident_level, 0) > colors.SEVERITY_ORDER.get(observed, 0):
+        return incident_level
     return observed
+
+
+def _primary(incidents: list[dict]) -> dict | None:
+    """Le plus sévère (puis le plus ancien) — pour les champs `incident`/`maintenance`
+    conservés à des fins de compatibilité descendante (§docs/api.md)."""
+    if not incidents:
+        return None
+    return min(
+        incidents,
+        key=lambda i: (-colors.SEVERITY_ORDER.get(i.get("level"), 0), i.get("created_at") or ""),
+    )
+
+
+# Sévérité par service (échelle de `ServiceState.status`), distincte de
+# `colors.SEVERITY_ORDER` qui note la sévérité *agrégée* d'un incident.
+_SERVICE_SEVERITY = {UNKNOWN: 0, OPERATIONAL: 0, DEGRADED: 1, DOWN: 2}
+
+
+def _incident_service_floor(level: str | None) -> str | None:
+    """Traduit le niveau d'un incident vers l'échelle par service, ou `None`.
+
+    Un incident manuel (`/status incident`) est ouvert sur un état vécu par
+    l'utilisateur, pas forcément déclaré par le service : ses heartbeats
+    peuvent continuer à dire `operational`. Sans ce plancher, la ligne du
+    service concerné resterait "Operational" dans le sticky juste en dessous
+    du titre de l'incident qui le cite.
+    """
+    if level in (colors.PARTIAL_OUTAGE, colors.MAJOR_OUTAGE):
+        return DOWN
+    if level == colors.DEGRADED:
+        return DEGRADED
+    return None
+
+
+def _service_status_floor(status: str, floor: str | None) -> str:
+    if not floor:
+        return status
+    if _SERVICE_SEVERITY.get(floor, 0) > _SERVICE_SEVERITY.get(status, 0):
+        return floor
+    return status
 
 
 def _public_incident(incident: dict | None) -> dict | None:

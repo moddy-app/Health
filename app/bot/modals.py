@@ -73,6 +73,25 @@ def _notify_label() -> ui.Label:
     )
 
 
+def _choice_label(incident: dict) -> str:
+    kind = "Maintenance" if incident.get("type") == "maintenance" else "Incident"
+    return f"[{kind}] {incident.get('title') or kind}"[:100]
+
+
+def _target_label(choices: list[dict]) -> ui.Label:
+    """Le choix de l'incident à cibler — n'apparaît que si plusieurs sont actifs.
+
+    Un `RadioGroup` dans le modal plutôt qu'une commande séparée : Discord
+    n'autorise pas un second modal après le premier, et le staff doit pouvoir
+    choisir sans quitter `/status update` ou `/status resolve`.
+    """
+    options = [
+        discord.RadioGroupOption(label=_choice_label(incident), value=incident["id"])
+        for incident in choices[:10]
+    ]
+    return ui.Label(text="Target", component=ui.RadioGroup(options=options, required=True))
+
+
 def _severity_label() -> ui.Label:
     return ui.Label(
         text="Severity",
@@ -245,8 +264,15 @@ class IncidentCreateModal(_StaffModal, title="Create Incident"):
 class IncidentUpdateModal(_StaffModal, title="Post an Update"):
     action = "incident.update"
 
-    def __init__(self, ctx, *, maintenance: bool = False) -> None:
-        super().__init__(ctx, title="Update Maintenance" if maintenance else "Post an Update")
+    def __init__(
+        self,
+        ctx,
+        *,
+        incident_id: str | None = None,
+        choices: list[dict] | None = None,
+        maintenance: bool = False,
+    ) -> None:
+        super().__init__(ctx, title="Post an Update" if choices else ("Update Maintenance" if maintenance else "Post an Update"))
         self.message = ui.Label(
             text="Message",
             description="Public update, shown on the status page",
@@ -255,11 +281,16 @@ class IncidentUpdateModal(_StaffModal, title="Post an Update"):
         self.notify = _notify_label()
         self.add_item(self.message)
         self.add_item(self.notify)
+        # Un seul incident actif : la cible est connue d'avance, pas de choix à
+        # afficher. Plusieurs : un `RadioGroup` demande lequel viser.
+        self._incident_id = incident_id
+        self.target = _target_label(choices) if choices else None
+        if self.target is not None:
+            self.add_item(self.target)
 
     def build_payload(self, interaction: discord.Interaction) -> dict:
-        # L'incident concerné est déduit de `hm:incident:active`, jamais demandé
-        # au staff : il n'y en a qu'un à la fois.
         return {
+            "incident_id": self.target.component.value if self.target else self._incident_id,
             "message": self.message.component.value,
             "notify": bool(self.notify.component.values),
             "author": interaction.user.display_name,
@@ -277,17 +308,25 @@ class IncidentResolveModal(_StaffModal, title="Resolve Incident"):
 
     action = "incident.resolve"
 
-    def __init__(self, ctx, *, maintenance: bool = False) -> None:
-        super().__init__(ctx, title="Complete Maintenance" if maintenance else "Resolve Incident")
+    def __init__(
+        self,
+        ctx,
+        *,
+        incident_id: str | None = None,
+        choices: list[dict] | None = None,
+        maintenance: bool = False,
+    ) -> None:
+        title = "Resolve Incident" if choices else ("Complete Maintenance" if maintenance else "Resolve Incident")
+        super().__init__(ctx, title=title)
         self.message = ui.Label(
-            text="Completion note" if maintenance else "Resolution",
+            text="Completion note" if maintenance and not choices else "Resolution",
             description="Closing message, shown on the status page",
             component=ui.TextInput(
                 style=discord.TextStyle.paragraph,
                 max_length=1500,
                 default=(
                     "The scheduled maintenance has been completed."
-                    if maintenance
+                    if maintenance and not choices
                     else "This incident has been resolved."
                 ),
             ),
@@ -295,9 +334,14 @@ class IncidentResolveModal(_StaffModal, title="Resolve Incident"):
         self.notify = _notify_label()
         self.add_item(self.message)
         self.add_item(self.notify)
+        self._incident_id = incident_id
+        self.target = _target_label(choices) if choices else None
+        if self.target is not None:
+            self.add_item(self.target)
 
     def build_payload(self, interaction: discord.Interaction) -> dict:
         return {
+            "incident_id": self.target.component.value if self.target else self._incident_id,
             "message": self.message.component.value,
             "notify": bool(self.notify.component.values),
             "author": interaction.user.display_name,
@@ -305,13 +349,13 @@ class IncidentResolveModal(_StaffModal, title="Resolve Incident"):
 
 
 class MaintenanceCancelModal(_StaffModal, title="Cancel Maintenance"):
-    """Clôt la maintenance active — même mécanique que `IncidentResolveModal`
+    """Clôt une maintenance active — même mécanique que `IncidentResolveModal`
     (`incident.resolve` ferme n'importe quel incident actif), un libellé et un
     message par défaut qui parlent de maintenance plutôt que d'incident."""
 
     action = "incident.resolve"
 
-    def __init__(self, ctx) -> None:
+    def __init__(self, ctx, *, incident_id: str | None = None, choices: list[dict] | None = None) -> None:
         super().__init__(ctx)
         self.message = ui.Label(
             text="Reason",
@@ -325,9 +369,14 @@ class MaintenanceCancelModal(_StaffModal, title="Cancel Maintenance"):
         self.notify = _notify_label()
         self.add_item(self.message)
         self.add_item(self.notify)
+        self._incident_id = incident_id
+        self.target = _target_label(choices) if choices else None
+        if self.target is not None:
+            self.add_item(self.target)
 
     def build_payload(self, interaction: discord.Interaction) -> dict:
         return {
+            "incident_id": self.target.component.value if self.target else self._incident_id,
             "message": self.message.component.value,
             "notify": bool(self.notify.component.values),
             "author": interaction.user.display_name,

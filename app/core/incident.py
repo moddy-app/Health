@@ -669,10 +669,12 @@ class IncidentManager:
         Une update *éditée* là-bas (texte corrigé sur un update déjà posté) ne
         déclenche jamais le webhook — l'anti-boucle ne marque que les ID
         *nouveaux* (`hm:bs:seen_updates`) — donc une correction n'atteignait
-        jamais le message Discord. Cette commande resynchronise l'historique
-        affiché sur celui de Better Stack, à la main, plutôt que d'attendre
-        une update qui ne viendra pas. Porte sur tous les incidents actifs
-        adossés à un report, pas un seul : ils sont indépendants.
+        jamais le message Discord. Cette commande resynchronise à la main ce
+        que Discord affiche sur ce que dit Better Stack, plutôt que d'attendre
+        une update qui ne viendra pas : l'historique, le titre, la sévérité et
+        les services affectés, et la résolution s'il y en a eu une. Porte sur
+        tous les incidents actifs adossés à un report, pas un seul : ils sont
+        indépendants.
         """
         actives = [i for i in await self.get_active_all() if i.get("bs_report_id")]
         if not actives:
@@ -690,8 +692,28 @@ class IncidentManager:
             if not history:
                 continue
 
+            latest = history[-1]
+            self._resync_title(incident, report)
+            if _is_resolved_report(report, latest):
+                # Résolu là-bas pendant que le monitor regardait ailleurs : on
+                # le clôt ici aussi, plutôt que de rééditer un message rouge
+                # sous un incident terminé. Le dernier update devient la
+                # résolution elle-même, d'où l'historique tronqué juste avant.
+                incident["updates"] = _as_updates(history[:-1])
+                await self._save(incident)
+                synced.append(
+                    await self.resolve(
+                        incident["id"],
+                        message=latest.get("message") or "This incident has been resolved.",
+                        author="Better Stack",
+                        publish_betterstack=False,
+                    )
+                    or incident
+                )
+                continue
+
             incident["updates"] = _as_updates(history)
-            self._resync_severity(incident, report, history[-1])
+            self._resync_severity(incident, report, latest)
             await self._save(incident)
             if not await self._notifier.re_render(incident):
                 log.warning(
@@ -699,6 +721,26 @@ class IncidentManager:
                 )
             synced.append(incident)
         return synced
+
+    def _resync_title(self, incident: dict, report: dict) -> None:
+        """Reprend le titre du report, renommé à la main sur la status page.
+
+        Le titre est figé à l'ouverture — un incident qui s'aggrave garde le
+        sien pour ne pas désorienter ceux qui suivent le fil. Un renommage par
+        le staff, lui, est délibéré : `/status reload` existe pour que Discord
+        dise ce que dit Better Stack. Rien ne le réécrit en face, contrairement
+        au niveau d'un incident `auto`, donc aucun aller-retour à craindre.
+        """
+        title = (report.get("title") or "").strip()
+        if not title or title == incident.get("title"):
+            return
+        log.info(
+            "resync %s : titre « %s » -> « %s »",
+            incident.get("id"),
+            incident.get("title"),
+            title,
+        )
+        incident["title"] = title
 
     def _resync_severity(self, incident: dict, report: dict, latest: dict) -> None:
         """Réaligne niveau et services affectés sur ce que dit Better Stack.
@@ -719,6 +761,11 @@ class IncidentManager:
         if not affected:
             return
         level = _level_for(statuses)
+        if level == colors.OPERATIONAL:
+            # Tout est revenu : c'est une résolution, pas un changement de
+            # niveau. Elle se traite ailleurs — ici, ça ne ferait qu'un
+            # incident « en cours » peint en vert.
+            return
         if level != incident.get("level"):
             log.info(
                 "resync %s : niveau %s -> %s d'après Better Stack",
@@ -757,12 +804,13 @@ class IncidentManager:
             report_id = str(report.get("id"))
             if not report_id or report_id in tracked:
                 continue
-            # `ends_at` ne dit jamais rien (§docs/betterstack.md) : c'est
-            # `aggregate_state` qui tranche si ce report est encore actif.
-            if str(report.get("aggregate_state") or "").lower() == "resolved":
-                continue
             history = _history_of(report)
             if not history:
+                continue
+            # `ends_at` ne dit jamais rien (§docs/betterstack.md) : ce sont les
+            # ressources du dernier update, toutes revenues ou non, qui disent
+            # si ce report est encore ouvert.
+            if _is_resolved_report(report, history[-1]):
                 continue
 
             # `_adopt` reprend tout l'historique du report et marque chaque
@@ -852,6 +900,21 @@ class IncidentManager:
         active = await self._find_by_report(str(report.get("id")))
         if active is None:
             return
+
+        if _is_resolved_report(report, update):
+            # Une résolution n'est pas un update de plus. Relayée comme tel,
+            # elle remettait l'incident en « On Going », en rouge, alors que la
+            # status page le donnait clos — et le prochain `/status reload`
+            # repeignait le tout en `partial_outage`.
+            await self.resolve(
+                active["id"],
+                message=update.get("message") or "This incident has been resolved.",
+                author=update.get("author") or "Better Stack",
+                # Elle vient de là-bas : la renvoyer serait la boucle.
+                publish_betterstack=False,
+            )
+            return
+
         await self.add_update(
             active["id"],
             message=update.get("message") or "",
@@ -885,6 +948,14 @@ class IncidentManager:
         # ici qu'avec son dernier message se lirait comme s'il commençait.
         history = _history_of(report) or [update]
         latest = history[-1]
+
+        if _is_resolved_report(report, latest):
+            # Clos là-bas avant d'être arrivé ici : il n'y a plus rien à
+            # annoncer. L'adopter quand même ouvrirait un incident rouge sur
+            # une panne déjà terminée — vu en production après une résolution
+            # faite depuis la status page.
+            log.info("report Better Stack %s déjà résolu, rien à adopter", report_id)
+            return
 
         # L'incident n'existe que côté Better Stack : ses services affectés sont
         # des ressources de status page, qu'il faut retraduire. Sans ça, le
@@ -974,6 +1045,25 @@ async def _ignore(report: dict, update: dict) -> None:
     return None
 
 
+def _is_resolved_report(report: dict, latest: dict) -> bool:
+    """Better Stack a-t-il clos ce report ?
+
+    Il n'existe pas d'endpoint `/resolve` là-bas : une résolution est un update
+    dont **chaque** ressource affectée porte `status: "resolved"` — c'est ainsi
+    que le monitor lui-même résout, et ainsi que le staff résout depuis la
+    status page. `ends_at` reste `null` même clos, il ne dit rien.
+
+    Un retour partiel laisse les autres ressources en `downtime`/`degraded` :
+    seul un retour complet ferme l'incident.
+    """
+    if str(report.get("aggregate_state") or "").lower() == colors.BS_RESOLVED:
+        return True
+    resources = [r for r in (latest.get("affected_resources") or []) if isinstance(r, dict)]
+    return bool(resources) and all(
+        str(r.get("status") or "").lower() == colors.BS_RESOLVED for r in resources
+    )
+
+
 def _update_at(update: dict) -> str:
     """L'horodatage d'une update, quelle que soit sa provenance.
 
@@ -1029,13 +1119,17 @@ def _level_for(statuses: dict[str, str]) -> str:
     """Sévérité déduite de l'état des ressources d'un incident adopté.
 
     Faute de ressource lisible, on reste sur `partial_outage` : un incident
-    publié sur la status page n'est jamais anodin.
+    publié sur la status page n'est jamais anodin. Des ressources *toutes*
+    revenues, elles, se lisent : les repeindre en `partial_outage` faisait
+    rougir un incident qu'on venait de résoudre.
     """
     values = set(statuses.values())
     if DOWN in values:
         return colors.PARTIAL_OUTAGE
-    if "degraded" in values:
+    if DEGRADED in values:
         return colors.DEGRADED
+    if values == {OPERATIONAL}:
+        return colors.OPERATIONAL
     return colors.PARTIAL_OUTAGE
 
 

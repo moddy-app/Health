@@ -435,7 +435,27 @@ class IncidentManager:
         if not root_all:
             return
 
+        # Plusieurs groupes indépendants peuvent retomber sur le même incident —
+        # typiquement un incident manuel qui couvre tous les services. Traités
+        # séparément, chacun y écrit sa propre empreinte, écrase celle de
+        # l'autre, et l'incident reçoit un update à chaque cycle en alternant
+        # entre les deux messages : ils sont fusionnés avant tout update.
+        groups: list[tuple[set[str], dict | None]] = []
+        by_incident: dict[str, set[str]] = {}
         for cluster in self._clusters(root_all):
+            matched = next(
+                (i for i in auto_incidents if set(i.get("roots") or []) & cluster), None
+            ) or next(
+                (i for i in manual_incidents if set(i.get("affected") or []) & cluster), None
+            )
+            if matched is not None and matched["id"] in by_incident:
+                by_incident[matched["id"]].update(cluster)
+                continue
+            if matched is not None:
+                by_incident[matched["id"]] = cluster
+            groups.append((cluster, matched))
+
+        for cluster, matched in groups:
             # Ordonnés comme la configuration (`HM_SERVICES`), jamais
             # alphabétiquement : c'est cet ordre que lisent titres et messages.
             roots_ordered = [s for s in root_all if s in cluster]
@@ -446,12 +466,6 @@ class IncidentManager:
             affected = [s for s in snapshot.affected if s in cluster or s in collateral_set]
             level = _cluster_level(cluster, statuses, self._s.critical_services)
             fingerprint = _fingerprint(level, {s: statuses.get(s, "unknown") for s in affected})
-
-            matched = next(
-                (i for i in auto_incidents if set(i.get("roots") or []) & cluster), None
-            ) or next(
-                (i for i in manual_incidents if set(i.get("affected") or []) & cluster), None
-            )
 
             if matched is None:
                 if not await self._allow_any(roots_ordered, statuses):

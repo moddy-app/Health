@@ -456,6 +456,53 @@ async def test_an_adopted_incident_stops_producing_updates(manager, snapshot, st
     assert incident["level"] == colors.PARTIAL_OUTAGE
 
 
+
+async def test_two_unrelated_outages_under_one_manual_incident_do_not_alternate(store, notifier):
+    """Le cas de la production : un incident manuel couvre tout, deux pannes sans lien.
+
+    Chaque panne retombait sur le même incident avec sa propre empreinte et
+    écrasait celle de l'autre : un update toutes les 15 secondes, en
+    alternant « Feeds » et « API », sur Discord comme sur Better Stack.
+    """
+    from app.config import Settings
+
+    settings = Settings(
+        redis_url="",
+        hm_services="moddy-api,moddy-feeds",
+        hm_critical_services="moddy-api",
+        hm_impact_map="",
+        hm_startup_grace=0,
+        hm_min_silence=0,
+    )
+    graph = _impact_graph(settings)
+    manager = IncidentManager(settings, store, BetterStack(settings, store), notifier, graph)
+    await manager.open(
+        title="Hosting provider incident",
+        message="...",
+        level=colors.MAJOR_OUTAGE,
+        affected=["moddy-api", "moddy-feeds"],
+        origin="betterstack",
+        bs_report_id="1099029",
+    )
+
+    statuses = {"moddy-api": DOWN, "moddy-feeds": DOWN}
+    effective, impacted_by = graph.apply(statuses)
+    snap = Snapshot(
+        level=colors.MAJOR_OUTAGE,
+        updated_at=iso(),
+        services={n: ServiceState(service=n, status=s) for n, s in statuses.items()},
+        effective=effective,
+        impacted_by=impacted_by,
+    )
+    for _ in range(5):
+        await manager.reconcile(snap)
+
+    incident = await _solo(manager)
+    # Un seul update, qui nomme les deux pannes à la fois.
+    assert len(incident["updates"]) == 2
+    assert "API" in incident["updates"][-1]["message"]
+    assert "Feeds" in incident["updates"][-1]["message"]
+
 async def test_a_real_transition_is_always_reported(manager, snapshot, notifier):
     """Le rate-limit ne doit pas avaler un vrai changement d'état.
 

@@ -41,7 +41,7 @@ aucune alerte ne peut partir : tout finit dans la file de rattrapage.
 | `HM_SERVICES` | `moddy-bot,moddy-api,moddy-altguard,moddy-feeds` | Liste exhaustive des services attendus |
 | `HM_CRITICAL_SERVICES` | `moddy-bot,moddy-api` | Filtrée sur `HM_SERVICES` ; détermine partial vs major |
 | `HM_SERVICE_NAMES` | — | `id:Nom d'affichage`, séparés par `,`. Des défauts existent pour les services Moddy |
-| `HM_SERVICE_ORDER` | `moddy-bot,moddy-dashboard,moddy-website,moddy-api,moddy-altguard,moddy-feeds` | Ordre d'affichage — sticky, panneau, `/v1/status`. Un service absent passe après, dans son ordre d'origine |
+| `HM_SERVICE_ORDER` | `moddy-bot,moddy-dashboard,moddy-website,moddy-api,moddy-altguard,moddy-feeds,moddy-ai` | Ordre d'affichage — sticky, panneau, `/v1/status`. Un service absent passe après, dans son ordre d'origine |
 | `HM_IMPACT_MAP` | `moddy-bot>*;moddy-api>moddy-website,moddy-dashboard=down,moddy-bot` | Propagation d'impact |
 | `HM_HEARTBEAT_TTL` | `60` | TTL de `hm:hb:{service}` — trois fois l'intervalle d'émission |
 | `HM_CHECK_INTERVAL` | `15` | Période de la boucle de détection |
@@ -55,7 +55,7 @@ aucune alerte ne peut partir : tout finit dans la file de rattrapage.
 
 Une dérivation automatique donnerait « Moddy Api » là où la status page dit
 « API », d'où la table explicite. Les défauts couvrent `moddy-bot`, `moddy-api`,
-`moddy-altguard`, `moddy-feeds`, `moddy-dashboard`, `moddy-website` ; un service
+`moddy-altguard`, `moddy-feeds`, `moddy-dashboard`, `moddy-website`, `moddy-ai` ; un service
 inconnu retombe sur un `title case` de son identifiant.
 
 ### `HM_IMPACT_MAP`

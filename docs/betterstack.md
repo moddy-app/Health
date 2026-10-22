@@ -66,7 +66,7 @@ l'incident.
 ### Mapping des ressources
 
 ```env
-HM_BS_RESOURCE_MAP=moddy-bot:9035970,moddy-website:9035972,moddy-dashboard:9035971,moddy-api:9035973
+HM_BS_RESOURCE_MAP=moddy-bot:9035970,moddy-website:9035972,moddy-dashboard:9035971,moddy-api:9035973,moddy-altguard:9035974,moddy-feeds:9035975,moddy-ai:9035977
 ```
 
 **Un service sans `resource_id` est purement ignoré** — mieux vaut ne rien

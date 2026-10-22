@@ -229,8 +229,6 @@ et un bouton lien avec une URL vide lève à l'envoi.
 ```
 
 Toujours `<t:unix:F>` : chaque lecteur voit la date dans son propre fuseau.
-C'est aussi ce qui évite le décalage subi par la status page, réglée sur
-`America/Adak`.
 
 Un message Discord plafonne à 40 composants ; seuls les **15 derniers** updates
 sont rendus, précédés d'une ligne `-# N earlier update(s) not shown.` le cas

@@ -253,6 +253,10 @@ class IncidentManager:
             if updates
             else [{"kind": "created", "at": now, "message": message, "author": author}],
             "state_fingerprint": fingerprint,
+            # L'état annoncé pour chaque service, quand il l'est — c'est lui
+            # que le sticky affiche, pas le niveau de l'incident appliqué à
+            # tous. Un incident `auto` n'en a pas : ses états sont observés.
+            "statuses": dict(statuses) if statuses and origin != "auto" else {},
         }
         if starts_at:
             incident["starts_at"] = starts_at
@@ -283,6 +287,7 @@ class IncidentManager:
         publish_betterstack: bool = True,
         dedupe: bool = False,
         fingerprint: str | None = None,
+        declared: dict[str, str] | None = None,
     ) -> dict | None:
         incident = await self.get_active(incident_id_)
         if incident is None:
@@ -306,6 +311,8 @@ class IncidentManager:
             incident["affected"] = list(affected)
         if roots is not None:
             incident["roots"] = list(roots)
+        if declared is not None:
+            incident["statuses"] = dict(declared)
 
         incident["status"] = "updating"
         if fingerprint is not None:
@@ -488,6 +495,10 @@ class IncidentManager:
 
             is_auto = matched.get("origin") == "auto"
             target_level = level if is_auto else matched.get("level")
+            # Sur un incident ouvert à la main, l'état que le staff a posé sur
+            # chaque ressource prime sur l'impact déduit : republier l'état
+            # observé repeignait en `degraded` un site qu'il donnait en ligne.
+            published = statuses if is_auto else snapshot.with_declared(matched.get("statuses") or {})
             merged_affected = list(matched.get("affected") or [])
             merged_affected += [s for s in affected if s not in merged_affected]
             await self.add_update(
@@ -497,7 +508,7 @@ class IncidentManager:
                 affected=merged_affected,
                 roots=roots_ordered if is_auto else None,
                 notify=False,
-                statuses=statuses,
+                statuses=published,
                 dedupe=True,
                 fingerprint=fingerprint,
             )
@@ -790,6 +801,7 @@ class IncidentManager:
         incident["level"] = level
         incident["type"] = _type_for(level)
         incident["affected"] = affected
+        incident["statuses"] = statuses
 
     async def adopt_missing(self) -> list[dict]:
         """Rattrape tout incident Better Stack en cours que le monitor n'a pas chargé.
@@ -929,6 +941,9 @@ class IncidentManager:
             )
             return
 
+        # Le staff y change souvent l'état d'une ressource en même temps que
+        # le texte : sans le reprendre, le sticky gardait l'ancien.
+        _, declared = self._bs.services_for(update.get("affected_resources") or [])
         await self.add_update(
             active["id"],
             message=update.get("message") or "",
@@ -936,6 +951,7 @@ class IncidentManager:
             notify=False,
             # L'update existe déjà côté Better Stack : le republier bouclerait.
             publish_betterstack=False,
+            declared=declared or None,
         )
 
     async def _adopt(self, report: dict, update: dict) -> None:

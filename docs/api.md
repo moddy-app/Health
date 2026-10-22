@@ -106,17 +106,23 @@ et `ends_at` compris — la fenêtre planifiée par `/status maintenance` :
 | Champ | Sens |
 |---|---|
 | `status` | Ce que vit l'utilisateur, **propagation d'impact comprise** |
-| `reported` | Ce que le service dit de lui-même |
+| `reported` | Ce que le service dit de lui-même — `null` s'il n'est pas surveillé |
 | `impacted_by` | Les services dont la panne a dégradé celui-ci |
-| `since` | Horodatage du dernier changement d'état observé |
+| `since` | Horodatage du dernier changement d'état observé — `null` s'il n'est pas surveillé |
 
 `status` et `reported` diffèrent quand un service sain est dégradé par une
 dépendance. Un consommateur qui veut la santé technique brute lit `reported` ;
 la bannière utilisateur lit `status`.
 
-`services[]` ne liste que les services **surveillés** (`HM_SERVICES`). Website et
-Dashboard n'y figurent pas — ils ne poussent pas de heartbeat — mais peuvent
-apparaître dans `incident.affected`.
+Un incident ouvert à la main ou adopté depuis Better Stack corrige `status` :
+l'état qu'il annonce pour un service (celui de sa ressource sur la status page,
+ou du panneau de sévérité) remplace l'impact déduit, sans jamais descendre sous
+`reported`. Un service qu'il cite sans état précis prend le niveau de
+l'incident comme plancher.
+
+`services[]` liste les services surveillés — `HM_SERVICES` et `HM_PROBE_MAP` —
+puis les ressources de `HM_BS_RESOURCE_MAP` que rien ne surveille (AI
+Features) : sans incident qui les cite, elles sont `operational`.
 
 `starts_at`/`ends_at` ne sont renseignés que pour une maintenance : ils portent
 la fenêtre planifiée (§`/status maintenance`), pas l'horodatage de publication

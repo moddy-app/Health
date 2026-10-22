@@ -98,6 +98,21 @@ class Snapshot:
         """États effectifs — c'est ce qu'on publie sur la status page."""
         return dict(self.effective)
 
+    def with_declared(self, declared: dict[str, str]) -> dict[str, str]:
+        """États effectifs, corrigés par ceux qu'un incident non-`auto` annonce.
+
+        Le staff connaît mieux que la propagation l'état d'un service qu'il
+        cite : l'impact déduit (« may be degraded ») cède devant son annonce.
+        Ce que le service déclare de lui-même ne cède jamais — un service qui
+        se dit `down` reste `down`, quoi qu'en dise l'incident.
+        """
+        out = dict(self.effective)
+        for service, status in declared.items():
+            state = self.services.get(service)
+            reported = state.status if state else OPERATIONAL
+            out[service] = worst(status, reported)
+        return out
+
 
 class Detector:
     def __init__(self, settings: Settings, store: Store) -> None:
@@ -262,40 +277,55 @@ class Detector:
 
         # L'ordre d'affichage vient de la configuration : le payload est la
         # seule liste ordonnée que lisent le sticky, le panneau de détail et le
-        # dashboard.
-        ordered = self._s.display_order(list(snapshot.services))
+        # dashboard. Une ressource de la status page que rien ne surveille
+        # (AI Features, mise en panne à la main) y figure aussi : sans donnée
+        # ni incident, elle est en ligne.
+        ordered = self._s.display_order(
+            list(snapshot.services) + [s for s in self._s.bs_resource_map if s not in snapshot.services]
+        )
 
         level = snapshot.level
         floors: dict[str, str] = {}
+        declared: dict[str, str] = {}
         for incident in actives:
             floor = _incident_service_floor(incident.get("level"))
             level = _floor_level(level, incident.get("level"))
-            if not floor:
-                continue
+            # L'état que l'incident annonce pour chacun de ses services — celui
+            # de sa ressource sur Better Stack, ou du panneau de sévérité. Sans
+            # lui, le niveau de l'incident valait pour tous : un report
+            # `partial_outage` affichait « Down » sur un site resté en ligne.
+            explicit = incident.get("statuses") or {}
             for service in incident.get("affected") or []:
-                if _SERVICE_SEVERITY.get(floor, 0) > _SERVICE_SEVERITY.get(floors.get(service, OPERATIONAL), 0):
-                    floors[service] = floor
+                if service in explicit:
+                    declared[service] = worst(declared.get(service, OPERATIONAL), explicit[service])
+                elif floor:
+                    floors[service] = worst(floors.get(service, OPERATIONAL), floor)
+
+        statuses = snapshot.with_declared(declared)
+
+        def line(service: str) -> dict:
+            state = snapshot.services.get(service)
+            status = statuses.get(service, UNKNOWN)
+            if state is None and status == UNKNOWN:
+                status = OPERATIONAL
+            if service not in declared and service in floors:
+                # Ce que vit l'utilisateur, propagation d'impact comprise —
+                # et jamais moins sévère qu'un incident manuel qui le cite.
+                status = worst(status, floors[service])
+            return {
+                "id": service,
+                "name": self._s.display_name(service),
+                "status": status,
+                # Ce que le service dit de lui-même — rien s'il ne dit rien.
+                "reported": state.status if state else None,
+                "impacted_by": snapshot.impacted_by.get(service, []),
+                "since": state.since if state else None,
+            }
 
         return {
             "status": level,
             "updated_at": snapshot.updated_at,
-            "services": [
-                {
-                    "id": service,
-                    "name": self._s.display_name(service),
-                    # Ce que vit l'utilisateur, propagation d'impact comprise —
-                    # et jamais moins sévère qu'un incident manuel qui le cite.
-                    "status": _service_status_floor(
-                        snapshot.effective.get(service, snapshot.services[service].status),
-                        floors.get(service),
-                    ),
-                    # Ce que le service dit de lui-même.
-                    "reported": snapshot.services[service].status,
-                    "impacted_by": snapshot.impacted_by.get(service, []),
-                    "since": snapshot.services[service].since,
-                }
-                for service in ordered
-            ],
+            "services": [line(service) for service in ordered],
             "incidents": [_public_incident(i) for i in incidents],
             "incident": _public_incident(_primary(actives)),
             "maintenance": _public_incident(_primary(maintenances)),
@@ -348,12 +378,9 @@ def _incident_service_floor(level: str | None) -> str | None:
     return None
 
 
-def _service_status_floor(status: str, floor: str | None) -> str:
-    if not floor:
-        return status
-    if _SERVICE_SEVERITY.get(floor, 0) > _SERVICE_SEVERITY.get(status, 0):
-        return floor
-    return status
+def worst(a: str, b: str) -> str:
+    """Le plus sévère des deux états de service."""
+    return b if _SERVICE_SEVERITY.get(b, 0) > _SERVICE_SEVERITY.get(a, 0) else a
 
 
 def _public_incident(incident: dict | None) -> dict | None:

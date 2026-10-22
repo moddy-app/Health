@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app import keys
-from app.core.detector import DOWN, OPERATIONAL, UNKNOWN, Detector
+from app.core.detector import DEGRADED, DOWN, OPERATIONAL, UNKNOWN, Detector, ServiceState, Snapshot
 from app.render import colors
 from app.util import iso
 
@@ -294,3 +294,130 @@ async def test_public_status_ignores_maintenance_level(detector, settings, store
     }
     payload = detector.public_payload(snapshot, [incident])
     assert payload["status"] == colors.OPERATIONAL
+
+
+def _prod_like(store):
+    """La configuration de production pendant l'incident Railway."""
+    from app.config import Settings
+
+    settings = Settings(
+        redis_url="",
+        hm_services="moddy-bot,moddy-api,moddy-altguard,moddy-feeds",
+        hm_critical_services="moddy-bot,moddy-api",
+        hm_probe_map="moddy-dashboard:https://dashboard.example/healthz,moddy-website:https://www.example",
+        hm_bs_resource_map=(
+            "moddy-bot:1,moddy-dashboard:2,moddy-website:3,moddy-api:4,"
+            "moddy-altguard:5,moddy-feeds:6,moddy-ai:7"
+        ),
+        hm_startup_grace=0,
+    )
+    return settings, Detector(settings, store)
+
+
+def _snapshot(det: Detector, statuses: dict[str, str]) -> Snapshot:
+    effective, impacted_by = det.impact.apply(statuses)
+    return Snapshot(
+        level=colors.PARTIAL_OUTAGE,
+        updated_at=iso(),
+        services={n: ServiceState(service=n, status=s) for n, s in statuses.items()},
+        effective=effective,
+        impacted_by=impacted_by,
+    )
+
+
+async def test_the_sticky_shows_each_service_as_the_incident_declares_it(store):
+    """Le cas de la production : un report `partial_outage` affichait tout en « Down ».
+
+    Le site, donné en ligne sur la status page, et le bot, donné dégradé,
+    héritaient du niveau de l'incident ; l'impact déduit de la panne de l'API
+    ne doit pas non plus contredire ce que le staff a posé.
+    """
+    _, det = _prod_like(store)
+    observed = {
+        "moddy-bot": OPERATIONAL,
+        "moddy-api": DOWN,
+        "moddy-altguard": OPERATIONAL,
+        "moddy-feeds": DOWN,
+        "moddy-dashboard": OPERATIONAL,
+        "moddy-website": OPERATIONAL,
+    }
+    incident = {
+        "id": "inc",
+        "type": "incident",
+        "level": colors.PARTIAL_OUTAGE,
+        "status": "updating",
+        "affected": list(observed) + ["moddy-ai"],
+        "statuses": {
+            "moddy-bot": DEGRADED,
+            "moddy-dashboard": DOWN,
+            "moddy-website": OPERATIONAL,
+            "moddy-api": DOWN,
+            "moddy-altguard": DOWN,
+            "moddy-feeds": DOWN,
+            "moddy-ai": DOWN,
+        },
+        "updates": [],
+    }
+
+    payload = det.public_payload(_snapshot(det, observed), [incident])
+    shown = {s["id"]: s["status"] for s in payload["services"]}
+    assert shown == {
+        "moddy-bot": DEGRADED,
+        "moddy-dashboard": DOWN,
+        "moddy-website": OPERATIONAL,
+        "moddy-api": DOWN,
+        "moddy-altguard": DOWN,
+        "moddy-feeds": DOWN,
+        "moddy-ai": DOWN,
+    }
+
+
+async def test_a_service_that_reports_itself_down_stays_down(store):
+    """L'annonce du staff l'emporte sur l'impact déduit, jamais sur le service lui-même."""
+    _, det = _prod_like(store)
+    observed = {"moddy-bot": OPERATIONAL, "moddy-api": DOWN}
+    incident = {
+        "id": "inc",
+        "type": "incident",
+        "level": colors.DEGRADED,
+        "status": "open",
+        "affected": ["moddy-api"],
+        "statuses": {"moddy-api": DEGRADED},
+        "updates": [],
+    }
+
+    payload = det.public_payload(_snapshot(det, observed), [incident])
+    shown = {s["id"]: s["status"] for s in payload["services"]}
+    assert shown["moddy-api"] == DOWN
+
+
+async def test_an_unmonitored_status_page_resource_is_listed_as_online(store):
+    """AI Features n'envoie rien : il figure quand même, en ligne par défaut."""
+    _, det = _prod_like(store)
+    observed = {"moddy-bot": OPERATIONAL, "moddy-api": OPERATIONAL}
+
+    payload = det.public_payload(_snapshot(det, observed), [])
+    ai = next(s for s in payload["services"] if s["id"] == "moddy-ai")
+    assert ai["name"] == "AI Features"
+    assert ai["status"] == OPERATIONAL
+    assert ai["reported"] is None
+    assert payload["services"][-1]["id"] == "moddy-ai"
+
+
+async def test_an_incident_without_per_service_states_still_floors_its_services(store):
+    """Ouvert sans panneau de sévérité, un incident vaut pour tous ses services."""
+    _, det = _prod_like(store)
+    observed = {"moddy-bot": OPERATIONAL, "moddy-api": OPERATIONAL}
+    incident = {
+        "id": "inc",
+        "type": "incident",
+        "level": colors.PARTIAL_OUTAGE,
+        "status": "open",
+        "affected": ["moddy-ai"],
+        "updates": [],
+    }
+
+    payload = det.public_payload(_snapshot(det, observed), [incident])
+    shown = {s["id"]: s["status"] for s in payload["services"]}
+    assert shown["moddy-ai"] == DOWN
+    assert shown["moddy-bot"] == OPERATIONAL

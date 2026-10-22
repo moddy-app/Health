@@ -188,6 +188,12 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
   traités un par un, ils s'écrasaient l'empreinte et l'incident recevait un
   update toutes les 15 secondes, en alternant « Feeds » et « API ». Les groupes
   qui visent le même incident sont fusionnés avant l'update.
+- **Le niveau d'un incident ne vaut pas pour chacun de ses services.** Un
+  report `partial_outage` affichait « Down » sur tout ce qu'il citait, site resté
+  en ligne compris. L'incident retient l'état annoncé de chaque service
+  (`statuses`, repris de Better Stack ou du panneau de sévérité), et la
+  détection ne le republie pas par-dessus. Un incident d'avant ce champ n'en a
+  pas : `/status reload` le remplit.
 - **Un incident non-`auto` ne voit jamais son niveau réécrit.** Comparer le
   niveau *observé* au sien rouvre la garde de sortie de `reconcile` à chaque
   cycle : un update toutes les 15 secondes.

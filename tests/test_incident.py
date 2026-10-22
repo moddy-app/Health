@@ -1196,3 +1196,61 @@ async def test_sync_updates_without_an_active_incident_does_nothing(polling, not
     manager = polling([])
     assert await manager.sync_updates() == []
     assert notifier.re_rendered == []
+
+
+async def test_an_adopted_incident_remembers_each_resource_state(mapped_settings, store, notifier):
+    """Le sticky affiche ces états : sans eux, tout prenait le niveau de l'incident."""
+    await store.set(keys.BS_CURSOR, iso())
+    bs = BetterStack(mapped_settings, store)
+    bs.poll_index = StubIndex(
+        [
+            {
+                "id": "1099029",
+                "title": "Hosting provider incident",
+                "report_type": "manual",
+                "updated_at": iso(),
+                "updates": [
+                    {
+                        "id": "u1",
+                        "message": "We are investigating.",
+                        "published_at": iso(),
+                        "affected_resources": [
+                            {"status_page_resource_id": "4242", "status": "degraded"},
+                            {"status_page_resource_id": "4243", "status": "downtime"},
+                        ],
+                    }
+                ],
+            }
+        ]
+    )
+    manager = IncidentManager(mapped_settings, store, bs, notifier, _impact_graph(mapped_settings))
+    await manager.reconcile_betterstack()
+
+    incident = await _solo(manager)
+    assert incident["statuses"] == {"moddy-bot": DEGRADED, "moddy-api": DOWN}
+
+
+async def test_the_detection_does_not_overwrite_what_the_staff_declared(manager, snapshot):
+    """Republier l'impact déduit repeignait en `degraded` un site donné en ligne."""
+    await manager.open(
+        title="Hosting provider incident",
+        message="...",
+        level=colors.PARTIAL_OUTAGE,
+        affected=["moddy-api", "moddy-website"],
+        origin="discord",
+        statuses={"moddy-api": DOWN, "moddy-website": OPERATIONAL},
+        publish_betterstack=False,
+    )
+    published: list[dict] = []
+
+    async def _capture(incident, message, *, statuses, notify):
+        published.append(dict(statuses))
+
+    manager._publish_betterstack = _capture
+    await manager.reconcile(
+        snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": OPERATIONAL, "moddy-api": DOWN})
+    )
+
+    assert published, "la panne de l'API doit produire un update"
+    assert published[-1]["moddy-website"] == OPERATIONAL
+    assert published[-1]["moddy-api"] == DOWN

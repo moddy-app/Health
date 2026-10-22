@@ -30,8 +30,8 @@ Base `BETTERSTACK_API_BASE`, header `Authorization: Bearer $BETTERSTACK_TOKEN`.
   "notify_subscribers": false,
   "published_at": "2026-08-24T19:42:00Z",
   "affected_resources": [
-    { "status_page_resource_id": "8720238", "status": "downtime" },
-    { "status_page_resource_id": "8720241", "status": "degraded" }
+    { "status_page_resource_id": "9035970", "status": "downtime" },
+    { "status_page_resource_id": "9035973", "status": "degraded" }
   ]
 }
 ```
@@ -66,7 +66,7 @@ l'incident.
 ### Mapping des ressources
 
 ```env
-HM_BS_RESOURCE_MAP=moddy-bot:8720238,moddy-website:8720239,moddy-dashboard:8720240,moddy-api:8720241
+HM_BS_RESOURCE_MAP=moddy-bot:9035970,moddy-website:9035972,moddy-dashboard:9035971,moddy-api:9035973,moddy-altguard:9035974,moddy-feeds:9035975,moddy-ai:9035977
 ```
 
 **Un service sans `resource_id` est purement ignoré** — mieux vaut ne rien

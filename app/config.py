@@ -23,6 +23,7 @@ DEFAULT_SERVICE_NAMES: dict[str, str] = {
     "moddy-feeds": "Feeds",
     "moddy-dashboard": "Dashboard",
     "moddy-website": "Website",
+    "moddy-ai": "AI Features",
 }
 
 
@@ -59,7 +60,7 @@ class Settings(BaseSettings):
     # raison de suivre l'ordre de surveillance : on montre d'abord ce qu'un
     # utilisateur voit (le bot, le dashboard), les briques internes ensuite.
     # Un service absent de cette liste passe après, dans son ordre d'origine.
-    hm_service_order: str = "moddy-bot,moddy-dashboard,moddy-website,moddy-api,moddy-altguard,moddy-feeds"
+    hm_service_order: str = "moddy-bot,moddy-dashboard,moddy-website,moddy-api,moddy-altguard,moddy-feeds,moddy-ai"
     # Propagation d'impact : `source>cible1,cible2`, entrées séparées par `;`,
     # `*` valant « tous les autres services connus ». `=down` sur une cible
     # propage un `down` au lieu du `degraded` par défaut : sans son backend, le

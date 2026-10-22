@@ -70,20 +70,26 @@ Deux détails qui comptent :
   d'uvicorn, lui, est écarté : c'est la variante ANSI du message, illisible
   dans l'explorateur.
 
-### À corriger sur la status page
+### Correspondance avec la status page
 
-Constats relevés sur `index.json`, toujours valables au dernier poll :
+La page a été recréée : les `status_page_resource_id` ont tous changé, l'ID de
+la page (`237745`) non. Sur `index.json` :
 
-- **`Moddy Bot` est en `not_monitored`** alors que l'`aggregate_state` de la page
-  est `operational`. La page affiche publiquement que tout va bien pendant que la
-  ressource principale n'est plus surveillée.
-- **Timezone `America/Adak`** alors que les updates sont publiés en heure de
-  Paris : les barres journalières sont décalées d'une dizaine d'heures.
-- **AltGuard et Feeds n'existent pas** comme ressources. Les créer avant de
-  compléter `HM_BS_RESOURCE_MAP`, sinon leurs pannes ne seront jamais publiées
-  (le monitor ignore silencieusement un service non mappé).
-- **Nommage** : espaces en fin de `"Moddy Bot "`, l'API rangée dans la section
-  « Moddy Website », `"Internal API"` comme nom public.
+| Ressource publique | Section | Service |
+|---|---|---|
+| Moddy Bot | Services | `moddy-bot` |
+| Dashboard | Services | `moddy-dashboard` |
+| Website | Services | `moddy-website` |
+| Internal API | Services | `moddy-api` |
+| AltGuard | Modules | `moddy-altguard` |
+| Social Notifications | Modules | `moddy-feeds` |
+| AI Features | Modules | `moddy-ai` |
+| Health Monitor | Modules | — |
+
+`Health Monitor` reste hors de `HM_BS_RESOURCE_MAP` : le monitor ne peut pas
+publier sa propre panne. `moddy-ai` n'est pas dans `HM_SERVICES` tant qu'il
+n'émet pas de heartbeat — il y passerait `down` dès la fin de la période de
+grâce ; il reste nommable pour un incident ouvert à la main.
 
 ## Modes dégradés
 

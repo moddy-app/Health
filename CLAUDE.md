@@ -183,6 +183,11 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
   est vide et chaque update d'archive passe pour neuf : sans amorçage, le
   monitor adopte un incident résolu il y a des mois et le rejoue. Voir
   `reconcile_betterstack`.
+- **Deux pannes sans lien peuvent tomber sur le même incident.** Un incident
+  manuel qui couvre tous les services attire chaque groupe de `reconcile` ;
+  traités un par un, ils s'écrasaient l'empreinte et l'incident recevait un
+  update toutes les 15 secondes, en alternant « Feeds » et « API ». Les groupes
+  qui visent le même incident sont fusionnés avant l'update.
 - **Un incident non-`auto` ne voit jamais son niveau réécrit.** Comparer le
   niveau *observé* au sien rouvre la garde de sortie de `reconcile` à chaque
   cycle : un update toutes les 15 secondes.

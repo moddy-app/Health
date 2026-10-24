@@ -21,6 +21,7 @@ en dur ailleurs.
 | `hm:sticky:message_id` | string | — | ID du sticky Discord (écrit par le bot) |
 | `hm:notify:sent` | set | — | Anti-doublon : `sha1(incident_id + nb_updates + canal)` |
 | `hm:notify:queue` | list | — | File de rattrapage, plafonnée à 200 |
+| `hm:auto:paused` | string (JSON) | — | `/status pause` : `{by, at}`, absente quand la détection automatique tourne |
 | `hm:notify:rl:{service}:{status}` | string | `HM_NOTIFY_RATE_LIMIT` (300s) | Rate-limit par service et par état |
 | `hm:ratelimit:{ip}` | string | fenêtre du rate limit | Compteur de l'API publique |
 

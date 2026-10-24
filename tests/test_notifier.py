@@ -248,3 +248,31 @@ async def test_a_shortened_history_does_not_swallow_the_next_versions(make):
     await notifier.dispatch(sent)
 
     assert bot.calls[calls:] == [("edit", "1409"), ("edit", "1409")]
+
+
+
+async def test_render_to_rewrites_the_given_message_even_if_already_sent(make):
+    """`/status resend` : le staff demande explicitement l'envoi, pas de filtre."""
+    bot, webhook = FakeBot(), FakeWebhook()
+    notifier, _ = make(bot, webhook)
+    sent = await notifier.dispatch(incident())
+
+    assert await notifier.render_to(sent, "1409") == "1409"
+    assert bot.calls[-1] == ("edit", "1409")
+    assert webhook.sent == 0
+
+
+async def test_render_to_without_a_message_posts_a_new_one(make):
+    bot, webhook = FakeBot(), FakeWebhook()
+    notifier, _ = make(bot, webhook)
+
+    assert await notifier.render_to(incident(), None) == "1409"
+    assert bot.calls == [("send", None)]
+
+
+async def test_render_to_needs_the_bot(make):
+    bot, webhook = FakeBot(enabled=False), FakeWebhook()
+    notifier, _ = make(bot, webhook)
+
+    assert await notifier.render_to(incident(), "1409") is None
+    assert webhook.sent == 0 and webhook.edited == []

@@ -43,6 +43,10 @@ class StubNotifier:
     async def refresh_sticky(self, public):
         return None
 
+    async def render_to(self, incident, message_id):
+        self.rendered = getattr(self, "rendered", []) + [(dict(incident), message_id)]
+        return message_id or "2001"
+
 
 @pytest.fixture
 def notifier():
@@ -1254,3 +1258,136 @@ async def test_the_detection_does_not_overwrite_what_the_staff_declared(manager,
     assert published, "la panne de l'API doit produire un update"
     assert published[-1]["moddy-website"] == OPERATIONAL
     assert published[-1]["moddy-api"] == DOWN
+
+
+
+def _railway_report(*, resolved: bool) -> dict:
+    """Le report de l'incident Railway, tel que le sert `index.json`."""
+    updates = [
+        {
+            "id": "a",
+            "message": "Our hosting provider reported a breach.",
+            "published_at": "2026-10-22T14:06:00Z",
+            "affected_resources": [
+                {"status_page_resource_id": "4242", "status": "downtime"},
+                {"status_page_resource_id": "4243", "status": "degraded"},
+            ],
+        },
+        {
+            "id": "b",
+            "message": "Moddy Bot is back.",
+            "published_at": "2026-10-23T17:26:00Z",
+            "affected_resources": [
+                {"status_page_resource_id": "4242", "status": "resolved"},
+                {"status_page_resource_id": "4243", "status": "downtime"},
+            ],
+        },
+    ]
+    if resolved:
+        updates.append(
+            {
+                "id": "c",
+                "message": "All Moddy services are now fully operational again.",
+                "published_at": "2026-10-24T23:34:00Z",
+                "affected_resources": [
+                    {"status_page_resource_id": "4242", "status": "resolved"},
+                    {"status_page_resource_id": "4243", "status": "resolved"},
+                ],
+            }
+        )
+    return {
+        "id": "1099029",
+        "title": "Major security breach",
+        "report_type": "manual",
+        "aggregate_state": "resolved" if resolved else "downtime",
+        "updates": updates,
+    }
+
+
+def _resending(mapped_settings, store, notifier, report: dict) -> IncidentManager:
+    bs = BetterStack(mapped_settings, store)
+    bs.poll_index = StubIndex([report])
+    return IncidentManager(mapped_settings, store, bs, notifier, _impact_graph(mapped_settings))
+
+
+async def test_resend_shows_a_resolution_the_message_missed(mapped_settings, store, notifier):
+    """Le cas de la production : le message restait « On Going » sous un incident clos."""
+    manager = _resending(mapped_settings, store, notifier, _railway_report(resolved=True))
+
+    incident, written = await manager.resend("1099029", "1409")
+
+    assert written == "1409"
+    assert incident["status"] == "resolved"
+    assert [u["kind"] for u in incident["updates"]] == ["created", "updated", "resolved"]
+    assert incident["updates"][-1]["message"].startswith("All Moddy services")
+    # Le niveau se lit avant la résolution, pas sur des ressources toutes `resolved`.
+    assert incident["level"] == colors.PARTIAL_OUTAGE
+    assert notifier.rendered[-1][1] == "1409"
+
+
+async def test_resend_without_a_link_posts_a_new_message(mapped_settings, store, notifier):
+    manager = _resending(mapped_settings, store, notifier, _railway_report(resolved=True))
+
+    _, written = await manager.resend("1099029")
+
+    assert written == "2001"
+    assert notifier.rendered[-1][1] is None
+
+
+async def test_resend_moves_an_active_incident_to_the_new_message(mapped_settings, store, notifier):
+    """Ses prochaines updates doivent éditer le message renvoyé, pas l'ancien."""
+    manager = _resending(mapped_settings, store, notifier, _railway_report(resolved=False))
+    await manager.open(
+        title="Major security breach",
+        message="...",
+        level=colors.MAJOR_OUTAGE,
+        affected=["moddy-bot"],
+        origin="betterstack",
+        bs_report_id="1099029",
+        publish_betterstack=False,
+    )
+
+    await manager.resend("1099029")
+
+    incident = await _solo(manager)
+    assert incident["discord_message_id"] == "2001"
+    assert len(incident["updates"]) == 2
+    assert incident["status"] != "resolved"
+
+
+async def test_resend_of_an_unknown_report_writes_nothing(mapped_settings, store, notifier):
+    manager = _resending(mapped_settings, store, notifier, _railway_report(resolved=True))
+
+    incident, written = await manager.resend("42")
+
+    assert incident is None and written is None
+    assert not getattr(notifier, "rendered", [])
+
+
+async def test_a_paused_detection_opens_nothing(manager, snapshot):
+    await manager.pause_auto("Jules")
+    await manager.reconcile(snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": DOWN}))
+    assert await manager.get_active_all() == []
+
+    # Reprise : la panne toujours en cours est signalée au cycle suivant.
+    await manager.resume_auto("Jules")
+    await manager.reconcile(snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": DOWN}))
+    assert len(await manager.get_active_all()) == 1
+
+
+async def test_a_paused_detection_still_relays_better_stack(polling, store):
+    """La pause ne touche que l'automatique : un incident posté sur Better Stack arrive."""
+    await store.set(keys.BS_CURSOR, iso())
+    manager = polling([report("1019848", message="We are investigating.", at=iso())])
+    await manager.pause_auto("Jules")
+
+    await manager.reconcile_betterstack()
+    assert len(await manager.get_active_all()) == 1
+
+
+async def test_a_paused_detection_never_resolves_on_its_own(manager, snapshot):
+    await manager.reconcile(snapshot(colors.MAJOR_OUTAGE, {"moddy-bot": DOWN}))
+    await manager.pause_auto("Jules")
+
+    await manager.reconcile(snapshot(colors.OPERATIONAL, {"moddy-bot": OPERATIONAL}))
+    assert len(await manager.get_active_all()) == 1

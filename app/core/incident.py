@@ -406,6 +406,11 @@ class IncidentManager:
         """
         if snapshot.in_grace:
             return
+        if await self.auto_paused():
+            # `/status pause` : le staff reprend la main. Rien ne s'ouvre, ne se
+            # met à jour ni ne se résout tout seul ; le relais depuis Better
+            # Stack, lui, continue — il ne vient pas de la détection.
+            return
 
         for service, _, new_status in snapshot.transitions:
             if new_status == OPERATIONAL:
@@ -648,6 +653,115 @@ class IncidentManager:
 
         log.warning("commande inconnue: %s", action)
         return None
+
+    # ------------------------------------------------------------------
+    # Pause de la détection automatique
+    # ------------------------------------------------------------------
+    async def auto_paused(self) -> dict | None:
+        """Qui a suspendu la détection automatique, et quand — None si active."""
+        data = await self._store.get_json(keys.AUTO_PAUSED)
+        return data if isinstance(data, dict) else None
+
+    async def pause_auto(self, author: str) -> dict:
+        data = {"by": author, "at": iso()}
+        await self._store.set_json(keys.AUTO_PAUSED, data)
+        log.warning("détection automatique suspendue par %s", author)
+        return data
+
+    async def resume_auto(self, author: str) -> None:
+        await self._store.delete(keys.AUTO_PAUSED)
+        log.warning("détection automatique reprise par %s", author)
+
+    # ------------------------------------------------------------------
+    # Renvoi d'un message d'incident (`/status resend`)
+    # ------------------------------------------------------------------
+    async def resend(self, report_id: str, message_id: str | None = None) -> tuple[dict | None, str | None]:
+        """Réécrit le message Discord d'un report Better Stack, depuis Better Stack.
+
+        Sans `message_id`, poste un message neuf ; avec, réécrit celui-là en
+        place et rien d'autre. Un incident encore actif ici est rattaché au
+        message écrit, avec l'historique rechargé : ses prochaines updates
+        l'éditent au lieu de rééditer l'ancien. Rien ne part vers Better Stack.
+
+        Renvoie (incident reconstruit, ID du message écrit) ; l'incident est
+        None si le report est introuvable, l'ID None si Discord a refusé.
+        """
+        snapshot = await self._bs.poll_index()
+        if snapshot is None:
+            return None, None
+        report = next((r for r in snapshot.reports if str(r.get("id")) == str(report_id)), None)
+        history = _history_of(report) if report else []
+        if not history:
+            return None, None
+
+        active = await self._find_by_report(str(report_id))
+        local = active or await self._find_archived(str(report_id))
+        incident = self._rebuilt(report, history, local)
+
+        written = await self._notifier.render_to(incident, message_id)
+        if written and active is not None:
+            # Clos là-bas mais encore actif ici, l'incident garde son état —
+            # `/status reload` le clôt — et ne reprend que le message, pour
+            # que cette clôture l'édite au lieu de l'ancien.
+            target = active if incident.get("status") == "resolved" else incident
+            target["discord_message_id"] = written
+            target["discord_transport"] = "bot"
+            target["discord_channel_id"] = self._s.discord_status_channel_id
+            await self._save(target)
+        return incident, written
+
+    async def _find_archived(self, report_id: str) -> dict | None:
+        for incident in await self.history(keys.INCIDENT_HISTORY_MAX):
+            if str(incident.get("bs_report_id")) == report_id:
+                return incident
+        return None
+
+    def _rebuilt(self, report: dict, history: list[dict], local: dict | None) -> dict:
+        """L'incident tel que Better Stack le raconte, sur la base locale s'il y en a une."""
+        is_maintenance = report.get("report_type") == "maintenance"
+        latest = history[-1]
+        resolved = _is_resolved_report(report, latest)
+
+        # Le niveau d'un report clos se lit avant sa résolution : toutes ses
+        # ressources sont `resolved`, elles ne disent plus ce qu'a été la panne.
+        before = [u for u in history if not _is_resolved_report({}, u)] or history
+        affected, statuses = self._bs.services_for(before[-1].get("affected_resources") or [])
+        level = colors.MAINTENANCE if is_maintenance else _level_for(statuses)
+        if level == colors.OPERATIONAL:
+            level = (local or {}).get("level") or colors.PARTIAL_OUTAGE
+
+        incident = dict(local) if local else {
+            "id": incident_id(),
+            "bs_report_id": str(report.get("id")),
+            "origin": "betterstack",
+            "created_by": "Better Stack",
+            "roots": [],
+        }
+        if resolved:
+            updates = _as_updates(history[:-1]) + [
+                {
+                    "kind": "resolved",
+                    "at": _update_at(latest) or iso(),
+                    "message": latest.get("message") or "This incident has been resolved.",
+                    "author": "Better Stack",
+                }
+            ]
+        else:
+            updates = _as_updates(history)
+        incident.update(
+            {
+                "title": report.get("title") or incident.get("title") or "Incident",
+                "type": TYPE_MAINTENANCE if is_maintenance else _type_for(level),
+                "level": level,
+                "affected": affected or list(incident.get("affected") or []),
+                "statuses": statuses if affected else dict(incident.get("statuses") or {}),
+                "status": "resolved" if resolved else "updating",
+                "created_at": incident.get("created_at") or updates[0]["at"],
+                "updates": updates,
+                "url": incident.get("url") or report.get("url") or self._url_for(str(report.get("id"))),
+            }
+        )
+        return incident
 
     # ------------------------------------------------------------------
     # Retour Better Stack (webhook + poll)

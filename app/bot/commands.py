@@ -7,6 +7,7 @@ propager, celui d'une guild est instantané.
 from __future__ import annotations
 
 import logging
+import re
 
 import discord
 from discord import app_commands
@@ -161,6 +162,129 @@ class StatusCommands(app_commands.Group):
             view=_notice(f"{theme.EMOJI_OK} " + " ".join(lines), colors.ACCENT_RESOLVED),
             ephemeral=True,
         )
+
+    @app_commands.command(
+        name="resend",
+        description="Rewrite an incident message from Better Stack, as a new message or in place",
+    )
+    @app_commands.describe(
+        report="Link to the incident on the status page (or its Better Stack ID)",
+        message="Link to the Discord message to rewrite in place — leave empty to post a new one",
+    )
+    @staff_only()
+    async def resend(
+        self, interaction: discord.Interaction, report: str, message: str | None = None
+    ) -> None:
+        settings = interaction.client.ctx.settings
+        report_id = parse_report_id(report)
+        if report_id is None:
+            await interaction.response.send_message(
+                view=_notice(
+                    f"{theme.EMOJI_ALERT} That doesn't look like a status page incident link.",
+                    colors.ACCENT_DEGRADED,
+                ),
+                ephemeral=True,
+            )
+            return
+
+        message_id = None
+        if message:
+            link = parse_message_link(message)
+            if link is None:
+                await interaction.response.send_message(
+                    view=_notice(
+                        f"{theme.EMOJI_ALERT} That doesn't look like a Discord message link.",
+                        colors.ACCENT_DEGRADED,
+                    ),
+                    ephemeral=True,
+                )
+                return
+            channel_id, message_id = link
+            if channel_id != str(settings.discord_status_channel_id):
+                # Le bot n'écrit que dans le salon de statut : un lien d'ailleurs
+                # serait cherché au mauvais endroit.
+                await interaction.response.send_message(
+                    view=_notice(
+                        f"{theme.EMOJI_ALERT} The message must be in the status channel.",
+                        colors.ACCENT_DEGRADED,
+                    ),
+                    ephemeral=True,
+                )
+                return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        incident, written = await interaction.client.ctx.incidents.resend(report_id, message_id)
+        if incident is None:
+            text = f"{theme.EMOJI_ALERT} Better Stack has no report {report_id} on the status page."
+            accent = colors.ACCENT_DEGRADED
+        elif written is None:
+            text = (
+                f"{theme.EMOJI_ALERT} Discord refused the message. A message posted by the "
+                "webhook can't be edited by the bot — leave the link empty to post a new one."
+            )
+            accent = colors.ACCENT_MAJOR
+        else:
+            done = "rewritten" if message_id else "posted"
+            text = f"{theme.EMOJI_OK} **{incident.get('title')}** {done} from Better Stack."
+            accent = colors.ACCENT_RESOLVED
+        await interaction.followup.send(view=_notice(text, accent), ephemeral=True)
+
+    @app_commands.command(
+        name="pause",
+        description="Stop automatic incidents — Better Stack updates are still relayed",
+    )
+    @staff_only()
+    async def pause(self, interaction: discord.Interaction) -> None:
+        incidents = interaction.client.ctx.incidents
+        current = await incidents.auto_paused()
+        if current:
+            text = f"{theme.EMOJI_ALERT} Automatic updates are already paused (by {current.get('by')})."
+            accent = colors.ACCENT_DEGRADED
+        else:
+            await incidents.pause_auto(str(interaction.user))
+            text = (
+                f"{theme.EMOJI_OK} Automatic updates paused. Outages are still detected, but "
+                "no incident is opened, updated or resolved on its own. Better Stack updates "
+                "are still relayed. Use `/status resume` to restart."
+            )
+            accent = colors.ACCENT_RESOLVED
+        await interaction.response.send_message(view=_notice(text, accent), ephemeral=True)
+
+    @app_commands.command(name="resume", description="Restart automatic incidents after a pause")
+    @staff_only()
+    async def resume(self, interaction: discord.Interaction) -> None:
+        incidents = interaction.client.ctx.incidents
+        if not await incidents.auto_paused():
+            text = f"{theme.EMOJI_ALERT} Automatic updates are not paused."
+            accent = colors.ACCENT_DEGRADED
+        else:
+            await incidents.resume_auto(str(interaction.user))
+            text = (
+                f"{theme.EMOJI_OK} Automatic updates restarted. An outage still going on will "
+                "be reported at the next check."
+            )
+            accent = colors.ACCENT_RESOLVED
+        await interaction.response.send_message(view=_notice(text, accent), ephemeral=True)
+
+
+_REPORT_LINK = re.compile(r"/(?:incident|incidents|status-reports?)/(\d+)")
+_MESSAGE_LINK = re.compile(r"discord(?:app)?\.com/channels/(?:\d+|@me)/(\d+)/(\d+)")
+
+
+def parse_report_id(text: str) -> str | None:
+    """L'ID d'un report : lien de la status page (avec ou sans langue), lien du
+    tableau de bord Better Stack, ou l'ID nu."""
+    text = (text or "").strip()
+    if text.isdigit():
+        return text
+    match = _REPORT_LINK.search(text)
+    return match.group(1) if match else None
+
+
+def parse_message_link(text: str) -> tuple[str, str] | None:
+    """(salon, message) d'un lien « Copy Message Link »."""
+    match = _MESSAGE_LINK.search((text or "").strip())
+    return (match.group(1), match.group(2)) if match else None
 
 
 def _is_maintenance(incident: dict) -> bool:

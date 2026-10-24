@@ -76,8 +76,24 @@ class Notifier:
     # ------------------------------------------------------------------
     @staticmethod
     def _dedup_key(incident: dict, channel: str) -> str:
-        update_index = len(incident.get("updates") or [])
-        raw = f"{incident.get('id')}:{update_index}:{channel}"
+        # Le nombre d'updates seul ne suffit pas : `/status reload` peut
+        # raccourcir l'historique (doublons supprimés sur Better Stack), et les
+        # versions suivantes retombaient sur des numéros déjà marqués — updates
+        # et résolution n'atteignaient plus jamais Discord. La dernière update
+        # et l'état de l'incident font partie de la version.
+        updates = incident.get("updates") or []
+        last = updates[-1] if updates else {}
+        raw = "\x1f".join(
+            [
+                str(incident.get("id")),
+                str(len(updates)),
+                str(incident.get("status")),
+                str(last.get("kind")),
+                str(last.get("at")),
+                str(last.get("message")),
+                channel,
+            ]
+        )
         return hashlib.sha1(raw.encode()).hexdigest()
 
     async def _already_sent(self, incident: dict, channel: str) -> bool:
@@ -188,10 +204,10 @@ class Notifier:
     async def re_render(self, incident: dict) -> bool:
         """Réédite le message d'incident tel quel — sans le filtre anti-doublon.
 
-        Sert au resync manuel des updates depuis Better Stack : leur contenu a
-        changé sous les pieds du dédoublonneur, qui ne compte que le nombre
-        d'updates (`_dedup_key`) et prendrait un texte corrigé pour un envoi
-        déjà fait. Édite sur le transport déjà propriétaire du message ; n'en
+        Sert au resync manuel des updates depuis Better Stack : un texte
+        corrigé sur une update existante ne change ni leur nombre ni la
+        dernière, et le dédoublonneur (`_dedup_key`) le prendrait pour un
+        envoi déjà fait. Édite sur le transport déjà propriétaire du message ; n'en
         poste jamais un nouveau, et ne marque rien dans l'anti-doublon.
         """
         message_id = incident.get("discord_message_id")
@@ -211,6 +227,32 @@ class Notifier:
             embed = build_raw_embed(presentation)
             return await self._webhook.edit(message_id, components, embed, presentation.mentions)
         return False
+
+    async def render_to(self, incident: dict, message_id: str | None) -> str | None:
+        """Réécrit tout le message d'un incident par le bot, ou en poste un neuf.
+
+        Pour `/status resend` : un message resté figé (« On Going » sous un
+        incident clos) se répare en place ou se republie. Hors de la chaîne de
+        redondance — c'est le bot qui répond à une commande — et sans filtre
+        anti-doublon : le staff demande explicitement l'envoi. Renvoie l'ID du
+        message écrit, ou None.
+        """
+        if not self._bot.enabled:
+            return None
+        presentation = IncidentPresentation.from_incident(
+            incident,
+            self._s.service_names,
+            mentions=self._s.mention_line(incident.get("affected") or []),
+        )
+        if message_id:
+            written = message_id if await self._bot.edit(message_id, presentation) else None
+        else:
+            written = await self._bot.send(presentation)
+        if written:
+            # La version affichée est à jour : le prochain `dispatch` de la même
+            # version n'a pas à la réécrire.
+            await self._mark_sent(incident, "bot")
+        return written
 
     # ------------------------------------------------------------------
     # File de rattrapage

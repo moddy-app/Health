@@ -444,6 +444,38 @@ jusqu'à une heure à se propager, celui d'une guild est instantané.
 | `/status check` | État détaillé (éphémère) |
 | `/status sticky` | Force le repost du sticky |
 | `/status reload` | Resynchronise les updates de l'incident actif depuis Better Stack |
+| `/status resend report:<lien> [message:<lien>]` | Réécrit le message d'un report depuis Better Stack : un message neuf, ou celui du lien en place |
+| `/status pause` | Suspend la détection automatique — le relais Better Stack continue |
+| `/status resume` | Reprend la détection automatique |
+
+### `/status resend`
+
+Répare un message resté figé — « On Going » sous un incident clos, updates
+manquantes — sans rien changer d'autre. Le report se désigne par son lien sur
+la status page (avec ou sans segment de langue), son lien du tableau de bord
+Better Stack, ou son ID nu. Il est relu dans `index.json`, actif ou archivé, et
+le message en est entièrement reconstruit : titre, historique, résolution s'il
+y en a une. Rien ne part vers Better Stack.
+
+- **Sans lien Discord**, un message neuf est posté.
+- **Avec un lien** (« Copy Message Link »), ce message est réécrit en place. Il
+  doit être dans le salon de statut et avoir été posté par le bot : un message
+  du webhook ne s'édite pas par le bot.
+- **Un incident encore actif ici** est rattaché au message écrit : ses
+  prochaines updates l'éditent, pas l'ancien. Clos sur Better Stack mais pas
+  ici, il garde son état — `/status reload` le clôt, et édite alors ce message.
+
+Hors chaîne de redondance (`Notifier.render_to`) : le bot répond à une
+commande, et l'anti-doublon ne s'applique pas — l'envoi est demandé.
+
+### `/status pause` et `/status resume`
+
+La pause coupe `IncidentManager.reconcile` : aucun incident ne s'ouvre, ne se
+met à jour ni ne se résout tout seul, et rien de la détection ne part vers
+Better Stack. Le reste tourne : détection, `/v1/status`, sticky, sondes, et le
+relais Better Stack → Discord (webhook, poll, `/status reload`). L'état vit dans
+`hm:auto:paused` pour survivre à un redéploiement. À la reprise, une panne
+toujours en cours est signalée au cycle suivant.
 
 **Hors création, une commande vaut pour un incident comme pour une
 maintenance** : `update`, `resolve` et `reload` agissent sur

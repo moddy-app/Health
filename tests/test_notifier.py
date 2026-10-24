@@ -218,3 +218,61 @@ async def test_sticky_refresh_goes_to_the_bot(make):
 
     await notifier.refresh_sticky({"status": "operational"})
     assert bot.sticky == [{"status": "operational"}]
+
+
+async def test_a_shortened_history_does_not_swallow_the_next_versions(make):
+    """Le cas de la production : le message restait « On Going » après la résolution.
+
+    Une trentaine d'updates en double, supprimées sur Better Stack puis
+    rechargées par `/status reload` : l'historique retombait à deux updates, et
+    chaque version suivante (troisième, quatrième, résolution) reprenait un
+    numéro déjà marqué comme envoyé.
+    """
+    bot, webhook = FakeBot(), FakeWebhook()
+    notifier, _ = make(bot, webhook)
+
+    sent = await notifier.dispatch(incident())
+    for n in range(5):
+        sent["updates"].append({"kind": "updated", "at": f"2026-10-22T22:4{n}:00Z", "message": "Spam."})
+        await notifier.dispatch(sent)
+    calls = len(bot.calls)
+
+    # Le reload ramène l'historique à deux updates.
+    sent["updates"] = sent["updates"][:1] + [
+        {"kind": "updated", "at": "2026-10-22T22:03:00Z", "message": "Still investigating."}
+    ]
+    sent["updates"].append({"kind": "updated", "at": "2026-10-23T17:26:00Z", "message": "Bot is back."})
+    await notifier.dispatch(sent)
+    sent["status"] = "resolved"
+    sent["updates"].append({"kind": "resolved", "at": "2026-10-24T23:34:00Z", "message": "All good."})
+    await notifier.dispatch(sent)
+
+    assert bot.calls[calls:] == [("edit", "1409"), ("edit", "1409")]
+
+
+
+async def test_render_to_rewrites_the_given_message_even_if_already_sent(make):
+    """`/status resend` : le staff demande explicitement l'envoi, pas de filtre."""
+    bot, webhook = FakeBot(), FakeWebhook()
+    notifier, _ = make(bot, webhook)
+    sent = await notifier.dispatch(incident())
+
+    assert await notifier.render_to(sent, "1409") == "1409"
+    assert bot.calls[-1] == ("edit", "1409")
+    assert webhook.sent == 0
+
+
+async def test_render_to_without_a_message_posts_a_new_one(make):
+    bot, webhook = FakeBot(), FakeWebhook()
+    notifier, _ = make(bot, webhook)
+
+    assert await notifier.render_to(incident(), None) == "1409"
+    assert bot.calls == [("send", None)]
+
+
+async def test_render_to_needs_the_bot(make):
+    bot, webhook = FakeBot(enabled=False), FakeWebhook()
+    notifier, _ = make(bot, webhook)
+
+    assert await notifier.render_to(incident(), "1409") is None
+    assert webhook.sent == 0 and webhook.edited == []

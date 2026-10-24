@@ -33,6 +33,10 @@ NOTIFY_RATELIMIT = "hm:notify:rl:{service}:{status}"
 # Anti-spam du bouton « Refresh », par utilisateur.
 REFRESH_COOLDOWN = "hm:sticky:cooldown:{user}"
 
+# Détection automatique suspendue par `/status pause` : qui, et depuis quand.
+# Dans le store pour survivre à un redéploiement — Railway redéploie souvent.
+AUTO_PAUSED = "hm:auto:paused"
+
 # Divers
 PUBLIC_RATELIMIT = "hm:ratelimit:{ip}"
 

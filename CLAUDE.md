@@ -120,6 +120,11 @@ réconciliation, calcul de `/v1/status`, rafraîchissement du sticky.
 - **Un update d'incident ne part que si `state_fingerprint` a bougé.** Comparer
   le niveau ou `affected` ne suffit pas : l'un n'est jamais réécrit hors `auto`,
   l'autre ne distingue pas `degraded` de `down`.
+- **Une version d'incident ne se reconnaît pas à son seul nombre d'updates.**
+  `/status reload` raccourcit l'historique quand des doublons ont été supprimés
+  sur Better Stack : les updates suivantes, résolution comprise, reprenaient des
+  numéros déjà marqués envoyés et Discord restait « On Going ». La clé de
+  `_dedup_key` porte aussi l'état et la dernière update.
 - **Une mention dans un embed ne prévient personne**, et un message Components
   V2 ne peut pas porter de `content` : le repli webhook est le seul endroit où
   `content` est rempli. Voir `_embed_payload`.

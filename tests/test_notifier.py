@@ -218,3 +218,33 @@ async def test_sticky_refresh_goes_to_the_bot(make):
 
     await notifier.refresh_sticky({"status": "operational"})
     assert bot.sticky == [{"status": "operational"}]
+
+
+async def test_a_shortened_history_does_not_swallow_the_next_versions(make):
+    """Le cas de la production : le message restait « On Going » après la résolution.
+
+    Une trentaine d'updates en double, supprimées sur Better Stack puis
+    rechargées par `/status reload` : l'historique retombait à deux updates, et
+    chaque version suivante (troisième, quatrième, résolution) reprenait un
+    numéro déjà marqué comme envoyé.
+    """
+    bot, webhook = FakeBot(), FakeWebhook()
+    notifier, _ = make(bot, webhook)
+
+    sent = await notifier.dispatch(incident())
+    for n in range(5):
+        sent["updates"].append({"kind": "updated", "at": f"2026-10-22T22:4{n}:00Z", "message": "Spam."})
+        await notifier.dispatch(sent)
+    calls = len(bot.calls)
+
+    # Le reload ramène l'historique à deux updates.
+    sent["updates"] = sent["updates"][:1] + [
+        {"kind": "updated", "at": "2026-10-22T22:03:00Z", "message": "Still investigating."}
+    ]
+    sent["updates"].append({"kind": "updated", "at": "2026-10-23T17:26:00Z", "message": "Bot is back."})
+    await notifier.dispatch(sent)
+    sent["status"] = "resolved"
+    sent["updates"].append({"kind": "resolved", "at": "2026-10-24T23:34:00Z", "message": "All good."})
+    await notifier.dispatch(sent)
+
+    assert bot.calls[calls:] == [("edit", "1409"), ("edit", "1409")]

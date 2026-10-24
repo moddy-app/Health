@@ -76,8 +76,24 @@ class Notifier:
     # ------------------------------------------------------------------
     @staticmethod
     def _dedup_key(incident: dict, channel: str) -> str:
-        update_index = len(incident.get("updates") or [])
-        raw = f"{incident.get('id')}:{update_index}:{channel}"
+        # Le nombre d'updates seul ne suffit pas : `/status reload` peut
+        # raccourcir l'historique (doublons supprimés sur Better Stack), et les
+        # versions suivantes retombaient sur des numéros déjà marqués — updates
+        # et résolution n'atteignaient plus jamais Discord. La dernière update
+        # et l'état de l'incident font partie de la version.
+        updates = incident.get("updates") or []
+        last = updates[-1] if updates else {}
+        raw = "\x1f".join(
+            [
+                str(incident.get("id")),
+                str(len(updates)),
+                str(incident.get("status")),
+                str(last.get("kind")),
+                str(last.get("at")),
+                str(last.get("message")),
+                channel,
+            ]
+        )
         return hashlib.sha1(raw.encode()).hexdigest()
 
     async def _already_sent(self, incident: dict, channel: str) -> bool:
